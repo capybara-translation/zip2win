@@ -439,6 +439,26 @@ func TestCreate_SingleFileSourceIsDestIsError(t *testing.T) {
 	}
 }
 
+// TestCreate_SourceIsTempFileIsError は Source が出力先の一時ファイル名 (<dest>.tmp) と
+// 同じ実体のとき、--force の取り残し掃除が入力ファイルを消してしまわないことを確認する。
+func TestCreate_SourceIsTempFileIsError(t *testing.T) {
+	tmp := t.TempDir()
+	dst := filepath.Join(tmp, "out.zip")
+	src := dst + ".tmp"
+	mustWrite(t, src, "precious")
+
+	err := Create(CreateOptions{Source: src, Dest: dst, Force: true})
+	if err == nil || !strings.Contains(err.Error(), "same file") {
+		t.Fatalf("err = %v, want 'same file' error", err)
+	}
+	if b, readErr := os.ReadFile(src); readErr != nil || string(b) != "precious" {
+		t.Errorf("source file was removed or modified: %q (err=%v)", b, readErr)
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("destination should not exist (err=%v)", err)
+	}
+}
+
 func newSourceDir(t *testing.T, tmp string) string {
 	t.Helper()
 	src := filepath.Join(tmp, "docs")

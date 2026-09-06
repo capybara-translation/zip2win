@@ -65,6 +65,12 @@ func Create(opts CreateOptions) error {
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return fmt.Errorf("source %q is a symbolic link", opts.Source)
 	}
+	// FIFO・ソケット・デバイスファイルは ZIP に入れられず、os.Open が読み手を待って
+	// 無限にブロックすることもある（FIFO）。単一ファイル入力は走査を通らないので、
+	// ディレクトリ内の同種のスキップ処理では守られない。ここで一時ファイルを作る前に弾く。
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return fmt.Errorf("source %q is not a regular file", opts.Source)
+	}
 	// 走査するパスを実体のパスに寄せておく（macOS の /tmp と /private/tmp のような別名の解決）。
 	// 末尾コンポーネントが symlink でないことは直前の Lstat で確認済みなので、
 	// ここで解決してもアーカイブのルート名（filepath.Base）は変わらない。
@@ -100,6 +106,15 @@ func Create(opts CreateOptions) error {
 	// 出力先が恒久的に塞がる。上書きを許可されている --force のときだけ取り除く。
 	// os.Remove は symlink ならリンク自身を消す（リンク先には触れない）。
 	if opts.Force {
+		// 消す前に「それは入力そのものではないか」を確かめる。Source に <dest>.tmp を
+		// 指定されると、掃除のつもりの Remove が入力データを消してしまう。
+		staleInfo, err := os.Lstat(tmpPath)
+		switch {
+		case err == nil && os.SameFile(staleInfo, info):
+			return errors.New("source and temporary file are the same file")
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("stat temporary file %q: %w", tmpPath, err)
+		}
 		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove stale temporary file %q: %w", tmpPath, err)
 		}
@@ -213,6 +228,12 @@ type creator struct {
 // 除外対象と symlink はここで弾く。
 func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 	if !info.IsDir() {
+		// 単一ファイル入力もディレクトリ内エントリと同じ除外判定を通す。
+		// ここで飛ばすと中身のない ZIP が黙って出来上がるので、エラーにする。
+		// Create 側の事前チェックと重なる二重の守り。
+		if c.isExcluded(info) {
+			return errors.New("source is the output file")
+		}
 		return c.add(srcAbs, info)
 	}
 	return filepath.WalkDir(srcAbs, func(path string, d fs.DirEntry, walkErr error) error {
