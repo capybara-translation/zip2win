@@ -120,6 +120,26 @@ func TestCreate_NormalizesNFDToNFC(t *testing.T) {
 	}
 }
 
+func TestCreate_NFCCollisionIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "が.txt"), "nfc")                  // NFC (U+304C)
+	mustWrite(t, filepath.Join(src, norm.NFD.String("が.txt")), "nfd") // NFD (U+304B U+3099)
+	names, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// APFS/HFS+ は正規化差を同名として扱うので 2 つ目の書き込みが 1 つ目を上書きし、衝突が起きない。
+	if len(names) < 2 {
+		t.Skip("filesystem merges NFC/NFD names; collision cannot occur here")
+	}
+
+	err = Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")})
+	if err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Errorf("err = %v, want collision error", err)
+	}
+}
+
 func TestCreate_SingleFile(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "メモ.txt")

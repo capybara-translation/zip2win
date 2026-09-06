@@ -94,6 +94,7 @@ func Create(opts CreateOptions) (retErr error) {
 		base:     filepath.Dir(srcAbs),
 		excluded: []string{dstAbs},
 		stderr:   stderr,
+		seen:     map[string]string{},
 	}
 	if err := c.walk(srcAbs, info); err != nil {
 		_ = zw.Close()
@@ -115,6 +116,8 @@ type creator struct {
 	excluded []string
 	// stderr はスキップ通知の出力先。
 	stderr io.Writer
+	// seen は正規化後の名前 -> 正規化前の相対パス。NFC 正規化で別ファイルが同名になる衝突を検出する。
+	seen map[string]string
 }
 
 // walk は srcAbs (ディレクトリまたはファイル) 配下を順に add する。
@@ -159,25 +162,31 @@ func isMacMetadata(name string) bool {
 	return name == ".DS_Store" || name == "__MACOSX" || strings.HasPrefix(name, "._")
 }
 
-// entryName は path を base からの相対パスにし、ZIP 用に区切りを / に統一して NFC 正規化する。
-func (c *creator) entryName(path string) (string, error) {
-	rel, err := filepath.Rel(c.base, path)
+// entryName は path を base からの相対パス rel と、ZIP 用に区切りを / に統一して
+// NFC 正規化した name に変換する。
+func (c *creator) entryName(path string) (rel, name string, err error) {
+	rel, err = filepath.Rel(c.base, path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// Linux ではファイル名が任意のバイト列になりうる。EFS を立てる以上、不正な UTF-8 は拒否する。
 	if !utf8.ValidString(rel) {
-		return "", fmt.Errorf("file name is not valid UTF-8: %q", rel)
+		return "", "", fmt.Errorf("file name is not valid UTF-8: %q", rel)
 	}
-	return norm.NFC.String(filepath.ToSlash(rel)), nil
+	return rel, norm.NFC.String(filepath.ToSlash(rel)), nil
 }
 
 // add は 1 エントリを ZIP に書く。
 func (c *creator) add(path string, info fs.FileInfo) error {
-	name, err := c.entryName(path)
+	rel, name, err := c.entryName(path)
 	if err != nil {
 		return err
 	}
+	// 同一パスのエントリが複数ある ZIP は両方を取り出せず、展開ツールごとに挙動が割れる。
+	if prev, dup := c.seen[name]; dup {
+		return fmt.Errorf("entry name collision after NFC normalization: %q and %q both become %q", prev, rel, name)
+	}
+	c.seen[name] = rel
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
 		return fmt.Errorf("build header for %s: %w", path, err)
