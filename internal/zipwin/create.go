@@ -155,6 +155,12 @@ func Create(opts CreateOptions) error {
 		_ = out.Close()
 		return fmt.Errorf("finalize zip: %w", err)
 	}
+	// rename の前に fsync する。ここを省くと、クラッシュ後に「名前はあるが中身が空」の
+	// ZIP が残りうる（rename はメタデータだけの操作で、データの到達を保証しない）。
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
@@ -168,6 +174,8 @@ func Create(opts CreateOptions) error {
 // checkDest は出力先の事前チェック。存在しなければ OK、ディレクトリなら常にエラー、
 // 既存ファイルは force のときだけ許可する。
 func checkDest(dstAbs string, force bool) error {
+	// Lstat は意図的。出力先が symlink でも rename はリンク自身を置き換える（リンク先には書かない）ので、
+	// リンク先ではなく symlink そのものの有無・種別を見る。
 	info, err := os.Lstat(dstAbs)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -196,6 +204,8 @@ type creator struct {
 	// stderr はスキップ通知の出力先。
 	stderr io.Writer
 	// seen は正規化後の名前 -> 正規化前の相対パス。NFC 正規化で別ファイルが同名になる衝突を検出する。
+	// ディレクトリも登録する。キーは末尾 "/" を付ける前の名前にしてあり、これは意図的:
+	// 同名のディレクトリとファイルは展開後に共存できないので衝突として弾く。
 	seen map[string]string
 }
 

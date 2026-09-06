@@ -153,6 +153,22 @@ func TestRun_InspectBadZipReturnsOne(t *testing.T) {
 	if !strings.Contains(stdout.String(), "NG") {
 		t.Errorf("stdout = %q, want NG marker", stdout.String())
 	}
+	if !strings.Contains(stderr.String(), "inspection found problems") {
+		t.Errorf("stderr = %q, want the summary line on stderr", stderr.String())
+	}
+}
+
+// TestRun_InspectMissingFileIsRuntimeError は検査 NG ではなく読み取り失敗の経路を確認する。
+func TestRun_InspectMissingFileIsRuntimeError(t *testing.T) {
+	tmp := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"inspect", filepath.Join(tmp, "nope.zip")}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "zip2win:") {
+		t.Errorf("stderr = %q, want error prefixed with zip2win:", stderr.String())
+	}
 }
 
 func TestRun_InspectWrongArgCount(t *testing.T) {

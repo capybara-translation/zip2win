@@ -183,6 +183,62 @@ func TestInspect_ASCIIWithoutEFSIsFlagged(t *testing.T) {
 	}
 }
 
+// TestInspect_DriveLetterOnlyForASCIILetter は 2 文字目の ':' だけを見て
+// 絶対パス扱いしないことを確認する。ドライブレターは ASCII 英字に限られる。
+func TestInspect_DriveLetterOnlyForASCIILetter(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "drive.zip")
+	writeRawZip(t, path, []*zip.FileHeader{
+		{Name: "C:/x", Flags: utf8Flag},
+		{Name: "1:2.txt", Flags: utf8Flag},
+	})
+
+	r, err := Inspect(path)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if e := findEntry(t, r, "C:/x"); !hasProblem(e, "absolute") {
+		t.Errorf("C:/x: problems = %v, want absolute path", e.Problems)
+	}
+	if e := findEntry(t, r, "1:2.txt"); hasProblem(e, "absolute") {
+		t.Errorf("1:2.txt: problems = %v, want no absolute path problem", e.Problems)
+	}
+}
+
+// TestCreateThenInspect_IsOK は create が作った ZIP を inspect が必ず OK と判定する
+// ラウンドトリップ不変条件のテスト。両者の仕様がずれたらここで落ちる。
+func TestCreateThenInspect_IsOK(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "配布 資料")
+	mustWrite(t, filepath.Join(src, "readme.txt"), "ascii")
+	mustWrite(t, filepath.Join(src, "日本語 名前.txt"), "japanese with space")
+	mustWrite(t, filepath.Join(src, norm.NFD.String("が.txt")), "nfd on disk")
+	mustWrite(t, filepath.Join(src, "sub", "深い階層", "file.txt"), "nested")
+	if err := os.MkdirAll(filepath.Join(src, "空フォルダ"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	r, err := Inspect(dst)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if !r.OK() {
+		for _, e := range r.Entries {
+			if len(e.Problems) > 0 {
+				t.Errorf("%q: %v", e.Name, e.Problems)
+			}
+		}
+	}
+	// ルート, readme.txt, 日本語 名前.txt, が.txt, sub/, sub/深い階層/, その中の file.txt, 空フォルダ/
+	if len(r.Entries) != 8 {
+		t.Errorf("got %d entries, want 8: %+v", len(r.Entries), r.Entries)
+	}
+}
+
 func TestInspect_NotAZip(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "x.zip")

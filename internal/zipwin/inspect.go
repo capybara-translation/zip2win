@@ -84,7 +84,9 @@ func checkName(name string, flags uint16) []string {
 	if strings.Contains(name, `\`) {
 		problems = append(problems, "backslash in name")
 	}
-	if strings.HasPrefix(name, "/") || (len(name) >= 2 && name[1] == ':') {
+	// ドライブレターは ASCII 英字 1 文字に限られる。':' だけを見ると "1:2.txt" のような
+	// 単なるコロン入りの名前まで絶対パス扱いしてしまう。
+	if strings.HasPrefix(name, "/") || (len(name) >= 2 && name[1] == ':' && isASCIILetter(name[0])) {
 		problems = append(problems, "absolute path")
 	}
 	for _, seg := range strings.Split(name, "/") {
@@ -100,6 +102,11 @@ func checkName(name string, flags uint16) []string {
 		}
 	}
 	return problems
+}
+
+// isASCIILetter は Windows のドライブレターに使える文字なら true。
+func isASCIILetter(b byte) bool {
+	return ('A' <= b && b <= 'Z') || ('a' <= b && b <= 'z')
 }
 
 // Format は人が読める形で結果を w に書き出す。

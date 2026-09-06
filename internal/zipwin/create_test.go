@@ -142,6 +142,31 @@ func TestCreate_NFCCollisionIsError(t *testing.T) {
 	}
 }
 
+// TestCreate_NFCCollisionBetweenDirsIsError はディレクトリ同士の衝突も検出することを確認する。
+// seen のキーは末尾 "/" を付ける前の名前なので、ディレクトリとファイルの衝突も拾える。
+func TestCreate_NFCCollisionBetweenDirsIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	for _, name := range []string{"が", norm.NFD.String("が")} {
+		if err := os.MkdirAll(filepath.Join(src, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// APFS/HFS+ は正規化差を同名として扱うので 2 つ目の MkdirAll が既存を指し、衝突が起きない。
+	if len(names) < 2 {
+		t.Skip("filesystem merges NFC/NFD names; collision cannot occur here")
+	}
+
+	err = Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")})
+	if err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Errorf("err = %v, want collision error", err)
+	}
+}
+
 func TestCreate_SingleFile(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "メモ.txt")
