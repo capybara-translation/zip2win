@@ -96,8 +96,19 @@ func Create(opts CreateOptions) error {
 	// 途中で失敗しても壊れた ZIP が Dest に残らず、--force の上書きも完成後に一度で行われる。
 	// O_EXCL: 既に同名があれば失敗させ、他者が置いた symlink 等を開かない。
 	tmpPath := dstAbs + ".tmp"
+	// 中断された過去の実行が一時ファイルを残していると O_EXCL が失敗し続け、
+	// 出力先が恒久的に塞がる。上書きを許可されている --force のときだけ取り除く。
+	// os.Remove は symlink ならリンク自身を消す（リンク先には触れない）。
+	if opts.Force {
+		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove stale temporary file %q: %w", tmpPath, err)
+		}
+	}
 	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("temporary file %q already exists (remove it or use --force)", tmpPath)
+		}
 		return fmt.Errorf("create temporary file: %w", err)
 	}
 	committed := false

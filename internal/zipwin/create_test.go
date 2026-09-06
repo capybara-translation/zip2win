@@ -435,7 +435,30 @@ func TestCreate_StaleTempFileIsError(t *testing.T) {
 
 	err := Create(CreateOptions{Source: src, Dest: dst})
 	if err == nil || !strings.Contains(err.Error(), "temporary file") {
-		t.Errorf("err = %v, want temporary file error", err)
+		t.Fatalf("err = %v, want temporary file error", err)
+	}
+	// 中断された過去の実行が残した一時ファイルで詰まったとき、抜け道を案内する。
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("err = %v, want the message to mention --force", err)
+	}
+}
+
+// TestCreate_StaleTempFileRemovedWithForce は取り残された <dest>.tmp が出力先を
+// 恒久的に塞がないこと（--force で回復できること）を確認する。
+func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+	mustWrite(t, dst+".tmp", "stale")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
+		t.Errorf("entries = %v, want [docs/ docs/a.txt]", got)
+	}
+	if _, err := os.Lstat(dst + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("temporary file still exists (err=%v)", err)
 	}
 }
 
