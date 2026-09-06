@@ -33,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "create":
 		return runCreate(args[1:], stdout, stderr)
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "zip2win: unknown command %q\n", args[0])
 		fmt.Fprint(stderr, usageText)
@@ -61,6 +63,28 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runInspect は inspect サブコマンドを実行する。検査 NG も exit 1。
+func runInspect(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprint(stderr, usageText)
+		return 2
+	}
+	report, err := zipwin.Inspect(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		return 1
+	}
+	if err := report.Format(stdout); err != nil {
+		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		return 1
+	}
+	if !report.OK() {
+		fmt.Fprintln(stderr, "zip2win: inspection found problems")
 		return 1
 	}
 	return 0

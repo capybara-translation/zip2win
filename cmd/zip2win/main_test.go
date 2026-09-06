@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -100,5 +101,63 @@ func TestRun_CreateForceFlag(t *testing.T) {
 	stderr.Reset()
 	if code := run([]string{"create", "--force", src, dst}, &stdout, &stderr); code != 0 {
 		t.Errorf("with --force: exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+}
+
+func TestRun_InspectGoodZipReturnsZero(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "日本語.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", src, dst}, &stdout, &stderr); code != 0 {
+		t.Fatalf("create failed: %s", stderr.String())
+	}
+
+	stdout.Reset()
+	code := run([]string{"inspect", dst}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "docs/日本語.txt") || !strings.Contains(stdout.String(), "EFS=true") {
+		t.Errorf("stdout = %q, want entry listing with EFS=true", stdout.String())
+	}
+}
+
+func TestRun_InspectBadZipReturnsOne(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bad.zip")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "日本語.txt", NonUTF8: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("x"))
+	zw.Close()
+	f.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"inspect", path}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String(), "NG") {
+		t.Errorf("stdout = %q, want NG marker", stdout.String())
+	}
+}
+
+func TestRun_InspectWrongArgCount(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"inspect"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
 	}
 }
