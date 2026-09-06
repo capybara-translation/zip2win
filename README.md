@@ -31,10 +31,10 @@ zip2win inspect docs.zip
 | ファイル名 | UTF-8 で格納し、EFS フラグ (General Purpose Bit Flag bit 11) を全エントリで明示 |
 | Unicode 正規化 | NFC（macOS 由来の NFD 名を変換） |
 | パス区切り | `/` |
-| 除外 | `.DS_Store`、`._*`、`__MACOSX/`、シンボリックリンク（スキップ時に stderr へ通知） |
+| 除外 | `.DS_Store`、`._*`、`__MACOSX/`、シンボリックリンク（スキップ時に stderr へ通知。`<source>` 自体が symlink の場合はエラー） |
 | NFC 正規化後に名前が衝突 | エラー（同一パスのエントリが複数ある ZIP を作らない） |
-| 出力先が既存 | エラー。`--force` で上書き |
-| 書き込み | 一時ファイル `<out>.zip.tmp` に書いて完成後に rename。途中失敗で壊れた ZIP を残さない |
+| 出力先が既存 | エラー。`--force` で上書き（出力先がディレクトリの場合は `--force` でもエラー） |
+| 書き込み | 一時ファイル `<出力先>.tmp`（例: `docs.zip` → `docs.zip.tmp`）に書いて完成後に rename。途中失敗で壊れた ZIP を残さない |
 | 出力 ZIP が入力ディレクトリ内 | 自分自身は取り込まない |
 
 Windows 予約名（`CON` など）や Windows で使えない文字（`: * ? " < > |`）は検査・変換しない。
