@@ -98,6 +98,11 @@ func Create(opts CreateOptions) error {
 		return err
 	}
 
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
 	// 同じディレクトリの一時ファイルに書き、完成後に rename する。
 	// 途中で失敗しても壊れた ZIP が Dest に残らず、--force の上書きも完成後に一度で行われる。
 	// O_EXCL: 既に同名があれば失敗させ、他者が置いた symlink 等を開かない。
@@ -114,6 +119,10 @@ func Create(opts CreateOptions) error {
 			return errors.New("source and temporary file are the same file")
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			return fmt.Errorf("stat temporary file %q: %w", tmpPath, err)
+		case err == nil:
+			// 消したことは黙らない。無関係なファイルが <dest>.tmp という名前で
+			// 置かれていた場合に、消えた理由をたどれるようにする。
+			fmt.Fprintf(stderr, "zip2win: removing stale temporary file: %s\n", DisplayName(tmpPath))
 		}
 		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove stale temporary file %q: %w", tmpPath, err)
@@ -133,10 +142,6 @@ func Create(opts CreateOptions) error {
 		}
 	}()
 
-	stderr := opts.Stderr
-	if stderr == nil {
-		stderr = io.Discard
-	}
 	// 自己取り込み防止の基準はパス文字列ではなくファイル実体にする。
 	// 一時ファイルの情報は開いた fd から取る（開いた直後に差し替えられても取り違えない）。
 	var excluded []fs.FileInfo

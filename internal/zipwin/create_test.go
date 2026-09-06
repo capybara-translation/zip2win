@@ -400,6 +400,49 @@ func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 	}
 }
 
+// TestCreate_ResolvesSourcePathAliases は Source が symlink 経由の別名パスで与えられても、
+// 走査を実体のパスで行うことを確認する（Create の EvalSymlinks(srcAbs) を固定するテスト）。
+// 解決しないと通知やエラーが実体と対応しない見かけのパスを指し、
+// どのファイルの話なのかを追えなくなる。ルート名は指定どおりのままでなければならない。
+func TestCreate_ResolvesSourcePathAliases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	tmp := t.TempDir()
+	realDir := filepath.Join(tmp, "real")
+	mustWrite(t, filepath.Join(realDir, "docs", "a.txt"), "a")
+	// 通知を出させるための symlink。通知に載るパスで解決の有無を観測する。
+	if err := os.Symlink(filepath.Join(realDir, "docs", "a.txt"), filepath.Join(realDir, "docs", "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Fatal(err)
+	}
+	// tmp 自体が symlink 経由のことがある (macOS の /var -> /private/var) ので期待値も解決しておく。
+	resolved, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	var stderr bytes.Buffer
+
+	if err := Create(CreateOptions{Source: filepath.Join(alias, "docs"), Dest: dst, Stderr: &stderr}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := filepath.Join(resolved, "docs", "link.txt")
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want the notice to name the resolved path %q", stderr.String(), want)
+	}
+	if strings.Contains(stderr.String(), alias+string(filepath.Separator)) {
+		t.Errorf("stderr = %q, want no unresolved alias path", stderr.String())
+	}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
+		t.Errorf("entries = %v, want [docs/ docs/a.txt]", got)
+	}
+}
+
 // TestCreate_DoesNotIncludeItselfCaseInsensitive は大文字小文字を区別しないファイルシステム
 // (APFS / NTFS の既定) で、Source と Dest の綴りだけが違う場合でも自己取り込みを防げることを確認する。
 // パス文字列の比較では防げず、ファイル実体の同一性 (os.SameFile) で判定する必要がある。
@@ -531,8 +574,9 @@ func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
 	src := newSourceDir(t, tmp)
 	dst := filepath.Join(tmp, "out.zip")
 	mustWrite(t, dst+".tmp", "stale")
+	var stderr bytes.Buffer
 
-	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
+	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true, Stderr: &stderr}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
@@ -540,6 +584,27 @@ func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
 	}
 	if _, err := os.Lstat(dst + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("temporary file still exists (err=%v)", err)
+	}
+	// 他人のファイルを消したように見える事故を避けるため、消したことは黙らない。
+	if !strings.Contains(stderr.String(), "removing stale temporary file") || !strings.Contains(stderr.String(), "out.zip.tmp") {
+		t.Errorf("stderr = %q, want a notice naming the removed temporary file", stderr.String())
+	}
+}
+
+// TestCreate_DoesNotIncludeExistingDestWithForce は --force で既存の出力先を上書きするとき、
+// 走査中に出会う「上書き前の Dest」を取り込まないことを確認する。
+func TestCreate_DoesNotIncludeExistingDestWithForce(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(src, "out.zip") // 出力先が入力ディレクトリの中
+	mustWrite(t, dst, "old")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := []string{"docs/", "docs/a.txt"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
 	}
 }
 
