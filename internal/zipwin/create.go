@@ -176,10 +176,10 @@ func checkDest(dstAbs string, force bool) error {
 		return fmt.Errorf("stat destination: %w", err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("destination %s is a directory", dstAbs)
+		return fmt.Errorf("destination %q is a directory", dstAbs)
 	}
 	if !force {
-		return fmt.Errorf("destination %s already exists (use --force to overwrite)", dstAbs)
+		return fmt.Errorf("destination %q already exists (use --force to overwrite)", dstAbs)
 	}
 	return nil
 }
@@ -226,14 +226,16 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		}
 		// WalkDir は symlink を辿らない。リンク先の意図しないファイル取り込みやループを避けるため
 		// エントリとしても格納せず、黙って欠落しないよう通知だけ出す。
+		// 通知には displayName を通す。名前に端末エスケープシーケンスが仕込まれていても
+		// そのまま端末へ流さない。
 		if d.Type()&fs.ModeSymlink != 0 {
-			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", path)
+			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", displayName(path))
 			return nil
 		}
 		// FIFO・ソケット・デバイスファイルは ZIP に入れられないうえ、os.Open が
 		// 読み手を待って無限にブロックすることがある（FIFO）。symlink と同様に通知して飛ばす。
 		if !info.Mode().IsRegular() && !info.IsDir() {
-			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", path)
+			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", displayName(path))
 			return nil
 		}
 		return c.add(path, info)
@@ -283,9 +285,15 @@ func (c *creator) add(path string, info fs.FileInfo) error {
 		return fmt.Errorf("entry name collision after NFC normalization: %q and %q both become %q", prev, rel, name)
 	}
 	c.seen[name] = rel
+	// バックスラッシュはディレクトリ区切りとして解釈する展開ツールがあり、
+	// 意図しない階層やパストラバーサルの素材になる（inspect も NG として報告する）。
+	// 名前を書き換えると元に戻せないので、警告だけ出して続行する。
+	if strings.Contains(name, `\`) {
+		fmt.Fprintf(c.stderr, "zip2win: warning: name contains backslash, some extractors treat it as a separator: %s\n", displayName(name))
+	}
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
-		return fmt.Errorf("build header for %s: %w", path, err)
+		return fmt.Errorf("build header for %q: %w", path, err)
 	}
 	header.Name = name
 	header.NonUTF8 = false

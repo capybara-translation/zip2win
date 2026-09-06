@@ -239,6 +239,10 @@ func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
 	if err := os.Symlink(filepath.Join(src, "real.txt"), filepath.Join(src, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
+	// 名前に端末エスケープシーケンスを仕込んだリンク。通知経由で端末を操作されないことを確認する。
+	if err := os.Symlink(filepath.Join(src, "real.txt"), filepath.Join(src, "esc\x1b[31m.txt")); err != nil {
+		t.Fatal(err)
+	}
 	dst := filepath.Join(tmp, "out.zip")
 	var stderr bytes.Buffer
 
@@ -251,6 +255,38 @@ func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "skipping symbolic link") || !strings.Contains(stderr.String(), "link.txt") {
 		t.Errorf("stderr = %q, want symlink notice naming link.txt", stderr.String())
+	}
+	// 名前に ESC を含むエントリでも、端末を操作できる生のエスケープシーケンスは出さない。
+	if strings.Contains(stderr.String(), "\x1b") {
+		t.Errorf("stderr contains a raw ESC: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `\u001b[31m`) {
+		t.Errorf("stderr = %q, want the ESC in the name escaped", stderr.String())
+	}
+}
+
+// TestCreate_WarnsOnBackslashInName はファイル名のバックスラッシュを警告することを確認する。
+// 一部の展開ツールはこれをディレクトリ区切りとして扱う（zip2win inspect も NG と報告する）。
+func TestCreate_WarnsOnBackslashInName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`\ cannot appear in a Windows file name`)
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, `a\b.txt`), "x")
+	dst := filepath.Join(tmp, "out.zip")
+	var stderr bytes.Buffer
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Stderr: &stderr}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"docs/", `docs/a\b.txt`}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+	if !strings.Contains(stderr.String(), "name contains backslash") || !strings.Contains(stderr.String(), `a\b.txt`) {
+		t.Errorf("stderr = %q, want a backslash warning naming the entry", stderr.String())
 	}
 }
 
