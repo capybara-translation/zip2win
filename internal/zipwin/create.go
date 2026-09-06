@@ -58,6 +58,21 @@ func Create(opts CreateOptions) (retErr error) {
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return fmt.Errorf("source %q is a symbolic link", opts.Source)
 	}
+	// symlink による別名（macOS の /tmp と /private/tmp など）を解決しておかないと、
+	// Source と Dest が実体として同じ場所でも文字列比較では一致せず、
+	// 自己取り込み防止（下記 excluded）が効かなくなる。
+	// 末尾コンポーネントが symlink でないことは直前の Lstat で確認済みなので、
+	// ここで解決してもアーカイブのルート名（filepath.Base）は変わらない。
+	srcAbs, err = filepath.EvalSymlinks(srcAbs)
+	if err != nil {
+		return fmt.Errorf("resolve source path: %w", err)
+	}
+	// dstAbs はまだ存在しないことがあるため本体は解決できない。親ディレクトリだけ解決して結合する。
+	dstDir, err := filepath.EvalSymlinks(filepath.Dir(dstAbs))
+	if err != nil {
+		return fmt.Errorf("resolve destination directory: %w", err)
+	}
+	dstAbs = filepath.Join(dstDir, filepath.Base(dstAbs))
 
 	out, err := os.Create(dstAbs)
 	if err != nil {

@@ -230,7 +230,68 @@ func TestCreate_NilStderrIsAllowed(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")
 	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(filepath.Join(src, "a.txt"), filepath.Join(src, "link.txt")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")}); err != nil {
 		t.Fatalf("Create with nil Stderr: %v", err)
+	}
+}
+
+func TestCreate_SkipsSymlinkToDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "real.txt"), "r")
+	mustWrite(t, filepath.Join(src, "sub", "inner.txt"), "i")
+	if err := os.Symlink(filepath.Join(src, "sub"), filepath.Join(src, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	var stderr bytes.Buffer
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Stderr: &stderr}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"docs/", "docs/real.txt", "docs/sub/", "docs/sub/inner.txt"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+	if !strings.Contains(stderr.String(), "skipping symbolic link") || !strings.Contains(stderr.String(), "linkdir") {
+		t.Errorf("stderr = %q, want symlink notice naming linkdir", stderr.String())
+	}
+}
+
+// TestCreate_DoesNotIncludeItselfViaPathAlias は Source と Dest が同じ実体を
+// 別名（macOS の /tmp と /private/tmp など）で参照する場合でも、書きかけの ZIP を
+// 自分自身に取り込まないことを確認する。alias 自体は symlink だが、
+// alias/docs という末尾コンポーネントは symlink ではないため受理される必要がある。
+func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	mustWrite(t, filepath.Join(real, "docs", "a.txt"), "a")
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(alias, "docs")           // alias 経由（alias 自体が symlink）
+	dst := filepath.Join(real, "docs", "out.zip") // 実パス側に出力
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"docs/", "docs/a.txt"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
 	}
 }
