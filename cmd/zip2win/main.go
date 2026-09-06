@@ -45,6 +45,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { fmt.Fprint(stderr, usageText) }
+	force := flags.Bool("force", false, "overwrite the output file if it exists")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -56,6 +57,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 		Source: flags.Arg(0),
 		Dest:   flags.Arg(1),
 		Stderr: stderr,
+		Force:  *force,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "zip2win: %v\n", err)

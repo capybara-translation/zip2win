@@ -81,3 +81,24 @@ func TestRun_CreateMissingSourceIsRuntimeError(t *testing.T) {
 		t.Errorf("stderr = %q, want error prefixed with zip2win:", stderr.String())
 	}
 }
+
+func TestRun_CreateForceFlag(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	if err := os.WriteFile(dst, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", src, dst}, &stdout, &stderr); code != 1 {
+		t.Errorf("without --force: exit code = %d, want 1", code)
+	}
+	stderr.Reset()
+	if code := run([]string{"create", "--force", src, dst}, &stdout, &stderr); code != 0 {
+		t.Errorf("with --force: exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+}

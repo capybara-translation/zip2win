@@ -3,7 +3,9 @@ package zipwin
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -313,5 +315,93 @@ func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 	want := []string{"docs/", "docs/a.txt"}
 	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
 		t.Errorf("entries = %v, want %v", got, want)
+	}
+}
+
+func newSourceDir(t *testing.T, tmp string) string {
+	t.Helper()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+	return src
+}
+
+func TestCreate_DestExistsWithoutForceIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+	mustWrite(t, dst, "precious")
+
+	err := Create(CreateOptions{Source: src, Dest: dst})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want 'already exists'", err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "precious" {
+		t.Errorf("existing file was modified: %q", b)
+	}
+}
+
+func TestCreate_DestExistsWithForceOverwrites(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+	mustWrite(t, dst, "old")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
+		t.Errorf("entries = %v", got)
+	}
+}
+
+func TestCreate_DestIsDirectoryIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "outdir")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := Create(CreateOptions{Source: src, Dest: dst, Force: true})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Errorf("err = %v, want 'is a directory'", err)
+	}
+}
+
+func TestCreate_StaleTempFileIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+	mustWrite(t, dst+".tmp", "stale")
+
+	err := Create(CreateOptions{Source: src, Dest: dst})
+	if err == nil || !strings.Contains(err.Error(), "temporary file") {
+		t.Errorf("err = %v, want temporary file error", err)
+	}
+}
+
+func TestCreate_FailureLeavesNoFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not block reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files regardless of mode")
+	}
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	unreadable := filepath.Join(src, "secret.txt")
+	mustWrite(t, unreadable, "s")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	dst := filepath.Join(tmp, "out.zip")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err == nil {
+		t.Fatal("expected error from unreadable file")
+	}
+	for _, p := range []string{dst, dst + ".tmp"} {
+		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s should not exist after failure (err=%v)", p, err)
+		}
 	}
 }

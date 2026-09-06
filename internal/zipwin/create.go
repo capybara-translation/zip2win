@@ -33,11 +33,13 @@ type CreateOptions struct {
 	Dest string
 	// Stderr はシンボリックリンクをスキップしたときの通知先。nil なら通知しない。
 	Stderr io.Writer
+	// Force が true なら既存の Dest を上書きする。
+	Force bool
 }
 
 // Create は opts.Source を ZIP にして opts.Dest に書き出す。
 // ディレクトリの場合はそのディレクトリ名が ZIP のルートフォルダになる。
-func Create(opts CreateOptions) (retErr error) {
+func Create(opts CreateOptions) error {
 	srcAbs, err := filepath.Abs(opts.Source)
 	if err != nil {
 		return fmt.Errorf("resolve source path: %w", err)
@@ -74,35 +76,72 @@ func Create(opts CreateOptions) (retErr error) {
 	}
 	dstAbs = filepath.Join(dstDir, filepath.Base(dstAbs))
 
-	out, err := os.Create(dstAbs)
-	if err != nil {
-		return fmt.Errorf("create destination: %w", err)
+	if err := checkDest(dstAbs, opts.Force); err != nil {
+		return err
 	}
+
+	// 同じディレクトリの一時ファイルに書き、完成後に rename する。
+	// 途中で失敗しても壊れた ZIP が Dest に残らず、--force の上書きも完成後に一度で行われる。
+	// O_EXCL: 既に同名があれば失敗させ、他者が置いた symlink 等を開かない。
+	tmpPath := dstAbs + ".tmp"
+	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	committed := false
 	defer func() {
-		if err := out.Close(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("close destination: %w", err)
+		if !committed {
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
-	zw := zip.NewWriter(out)
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	zw := zip.NewWriter(out)
 	c := &creator{
 		zw:       zw,
 		base:     filepath.Dir(srcAbs),
-		excluded: []string{dstAbs},
+		excluded: []string{dstAbs, tmpPath},
 		stderr:   stderr,
 		seen:     map[string]string{},
 	}
 	if err := c.walk(srcAbs, info); err != nil {
 		_ = zw.Close()
+		_ = out.Close()
 		return err
 	}
 	// Close で中央ディレクトリが書かれる。ここを検査しないと壊れた ZIP を成功扱いしてしまう。
 	if err := zw.Close(); err != nil {
+		_ = out.Close()
 		return fmt.Errorf("finalize zip: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+	if err := os.Rename(tmpPath, dstAbs); err != nil {
+		return fmt.Errorf("move zip into place: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// checkDest は出力先の事前チェック。存在しなければ OK、ディレクトリなら常にエラー、
+// 既存ファイルは force のときだけ許可する。
+func checkDest(dstAbs string, force bool) error {
+	info, err := os.Lstat(dstAbs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat destination: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("destination %s is a directory", dstAbs)
+	}
+	if !force {
+		return fmt.Errorf("destination %s already exists (use --force to overwrite)", dstAbs)
 	}
 	return nil
 }
