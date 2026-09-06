@@ -5,9 +5,46 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// TestRun_EscapesControlCharactersInErrorOutput はエラー内容の出力経路でも端末エスケープを
+// 通さないことを確認する。エラーは *fs.PathError などに包まれてファイル名を運ぶので、
+// zipwin 側の通知だけをエスケープしても生の ESC が stderr に届いてしまう。
+func TestRun_EscapesControlCharactersInErrorOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not block reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files regardless of mode")
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(src, "bad\x1b[31m.txt")
+	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bad, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(bad, 0o644) })
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", src, filepath.Join(tmp, "out.zip")}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr = %q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "\x1b") {
+		t.Errorf("stderr contains a raw ESC: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `\u001b`) {
+		t.Errorf("stderr = %q, want the ESC in the file name escaped", stderr.String())
+	}
+}
 
 func TestRun_NoArgsShowsUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer

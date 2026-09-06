@@ -117,16 +117,20 @@ func (r *Report) Format(w io.Writer) error {
 			status = "NG: " + strings.Join(e.Problems, "; ")
 		}
 		efs := e.Flags&utf8Flag != 0
-		if _, err := fmt.Fprintf(w, "%-40s EFS=%-5v Flags=%#04x %s\n", displayName(e.Name), efs, e.Flags, status); err != nil {
+		if _, err := fmt.Fprintf(w, "%-40s EFS=%-5v Flags=%#04x %s\n", DisplayName(e.Name), efs, e.Flags, status); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// displayName は端末へ安全に表示できるよう制御文字と不正バイトをエスケープする。
-// 悪意ある ZIP のエントリ名にエスケープシーケンスが含まれていても端末を操作されないようにする。
-func displayName(name string) string {
+// DisplayName は端末へ安全に表示できるよう制御文字と不正バイトをエスケープする。
+// 悪意ある ZIP のエントリ名やファイル名にエスケープシーケンスが含まれていても
+// 端末を操作されないようにする。
+// エントリ名だけでなく、ファイル名を含みうるエラーメッセージ全体にも適用する
+// （*fs.PathError のように名前が包まれて運ばれる経路があるため）。
+// 改行は制御文字としてエスケープされるので、1 行 1 メッセージの出力も崩れない。
+func DisplayName(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); {
 		r, size := utf8.DecodeRuneInString(name[i:])

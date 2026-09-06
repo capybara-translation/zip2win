@@ -269,8 +269,8 @@ func TestDisplayName(t *testing.T) {
 		{"bad\xffbyte", `bad\xffbyte`},
 	}
 	for _, c := range cases {
-		if got := displayName(c.in); got != c.want {
-			t.Errorf("displayName(%q) = %q, want %q", c.in, got, c.want)
+		if got := DisplayName(c.in); got != c.want {
+			t.Errorf("DisplayName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

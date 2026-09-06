@@ -22,6 +22,10 @@ func main() {
 
 // run はサブコマンドを振り分け、exit code を返す。
 // os.Exit を直接呼ばないのはテストから呼べるようにするため。
+//
+// エラーは必ず zipwin.DisplayName を通してから stderr へ出す。
+// *fs.PathError などに包まれたファイル名がそのまま端末へ流れると、
+// 名前に仕込まれたエスケープシーケンスで表示を操作されうる。
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usageText)
@@ -62,7 +66,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 		Force:  *force,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
 		return 1
 	}
 	return 0
@@ -76,11 +80,11 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 	}
 	report, err := zipwin.Inspect(args[0])
 	if err != nil {
-		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
 		return 1
 	}
 	if err := report.Format(stdout); err != nil {
-		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
 		return 1
 	}
 	if !report.OK() {

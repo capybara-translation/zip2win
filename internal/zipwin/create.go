@@ -257,16 +257,16 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		}
 		// WalkDir は symlink を辿らない。リンク先の意図しないファイル取り込みやループを避けるため
 		// エントリとしても格納せず、黙って欠落しないよう通知だけ出す。
-		// 通知には displayName を通す。名前に端末エスケープシーケンスが仕込まれていても
+		// 通知には DisplayName を通す。名前に端末エスケープシーケンスが仕込まれていても
 		// そのまま端末へ流さない。
 		if d.Type()&fs.ModeSymlink != 0 {
-			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", displayName(path))
+			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", DisplayName(path))
 			return nil
 		}
 		// FIFO・ソケット・デバイスファイルは ZIP に入れられないうえ、os.Open が
 		// 読み手を待って無限にブロックすることがある（FIFO）。symlink と同様に通知して飛ばす。
 		if !info.Mode().IsRegular() && !info.IsDir() {
-			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", displayName(path))
+			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", DisplayName(path))
 			return nil
 		}
 		return c.add(path, info)
@@ -320,7 +320,7 @@ func (c *creator) add(path string, info fs.FileInfo) error {
 	// 意図しない階層やパストラバーサルの素材になる（inspect も NG として報告する）。
 	// 名前を書き換えると元に戻せないので、警告だけ出して続行する。
 	if strings.Contains(name, `\`) {
-		fmt.Fprintf(c.stderr, "zip2win: warning: name contains backslash, some extractors treat it as a separator: %s\n", displayName(name))
+		fmt.Fprintf(c.stderr, "zip2win: warning: name contains backslash, some extractors treat it as a separator: %s\n", DisplayName(name))
 	}
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
