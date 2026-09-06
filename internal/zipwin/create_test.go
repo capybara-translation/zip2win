@@ -2,6 +2,7 @@ package zipwin
 
 import (
 	"archive/zip"
+	"bytes"
 	"io"
 	"maps"
 	"os"
@@ -161,5 +162,75 @@ func TestCreate_MissingSource(t *testing.T) {
 	err := Create(CreateOptions{Source: filepath.Join(tmp, "nope"), Dest: filepath.Join(tmp, "out.zip")})
 	if err == nil {
 		t.Fatal("expected error for missing source")
+	}
+}
+
+func TestCreate_ExcludesMacMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "keep.txt"), "k")
+	mustWrite(t, filepath.Join(src, ".DS_Store"), "junk")
+	mustWrite(t, filepath.Join(src, "._keep.txt"), "junk")
+	mustWrite(t, filepath.Join(src, "__MACOSX", "._x"), "junk")
+	mustWrite(t, filepath.Join(src, "sub", ".DS_Store"), "junk")
+	mustWrite(t, filepath.Join(src, "sub", "b.txt"), "b")
+	dst := filepath.Join(tmp, "out.zip")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"docs/", "docs/keep.txt", "docs/sub/", "docs/sub/b.txt"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+}
+
+func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "real.txt"), "r")
+	if err := os.Symlink(filepath.Join(src, "real.txt"), filepath.Join(src, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "out.zip")
+	var stderr bytes.Buffer
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Stderr: &stderr}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/real.txt"}) {
+		t.Errorf("entries = %v, want [docs/ docs/real.txt]", got)
+	}
+	if !strings.Contains(stderr.String(), "skipping symbolic link") || !strings.Contains(stderr.String(), "link.txt") {
+		t.Errorf("stderr = %q, want symlink notice naming link.txt", stderr.String())
+	}
+}
+
+func TestCreate_DoesNotIncludeItself(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+	dst := filepath.Join(src, "out.zip") // 出力先が入力ディレクトリの中
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
+		t.Errorf("entries = %v, want [docs/ docs/a.txt]", got)
+	}
+}
+
+func TestCreate_NilStderrIsAllowed(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+	if err := Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")}); err != nil {
+		t.Fatalf("Create with nil Stderr: %v", err)
 	}
 }

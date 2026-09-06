@@ -14,6 +14,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -29,6 +31,8 @@ type CreateOptions struct {
 	Source string
 	// Dest は出力する ZIP のパス。
 	Dest string
+	// Stderr はシンボリックリンクをスキップしたときの通知先。nil なら通知しない。
+	Stderr io.Writer
 }
 
 // Create は opts.Source を ZIP にして opts.Dest に書き出す。
@@ -66,7 +70,16 @@ func Create(opts CreateOptions) (retErr error) {
 	}()
 
 	zw := zip.NewWriter(out)
-	c := &creator{zw: zw, base: filepath.Dir(srcAbs)}
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	c := &creator{
+		zw:       zw,
+		base:     filepath.Dir(srcAbs),
+		excluded: []string{dstAbs},
+		stderr:   stderr,
+	}
 	if err := c.walk(srcAbs, info); err != nil {
 		_ = zw.Close()
 		return err
@@ -83,9 +96,14 @@ type creator struct {
 	zw *zip.Writer
 	// base は ZIP 内パスの基準ディレクトリ。Source の親なので Source 名がルートになる。
 	base string
+	// excluded は走査中に出会っても取り込まない絶対パス（出力 ZIP 自身など）。
+	excluded []string
+	// stderr はスキップ通知の出力先。
+	stderr io.Writer
 }
 
 // walk は srcAbs (ディレクトリまたはファイル) 配下を順に add する。
+// 除外対象と symlink はここで弾く。
 func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 	if !info.IsDir() {
 		return c.add(srcAbs, info)
@@ -94,12 +112,36 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		// 出力 ZIP が入力ディレクトリ内にあると、書きかけの自分自身を読み込んでしまう。
+		if slices.Contains(c.excluded, path) {
+			return nil
+		}
+		if isMacMetadata(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// WalkDir は symlink を辿らない。リンク先の意図しないファイル取り込みやループを避けるため
+		// エントリとしても格納せず、黙って欠落しないよう通知だけ出す。
+		if d.Type()&fs.ModeSymlink != 0 {
+			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", path)
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
 		return c.add(path, info)
 	})
+}
+
+// isMacMetadata は macOS が生成するメタデータファイル・フォルダ名なら true。
+//   - .DS_Store: Finder の表示設定
+//   - __MACOSX: AppleDouble などを格納するフォルダ
+//   - ._*: AppleDouble のサイドカーファイル
+func isMacMetadata(name string) bool {
+	return name == ".DS_Store" || name == "__MACOSX" || strings.HasPrefix(name, "._")
 }
 
 // entryName は path を base からの相対パスにし、ZIP 用に区切りを / に統一して NFC 正規化する。

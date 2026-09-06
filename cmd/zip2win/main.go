@@ -55,6 +55,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 	err := zipwin.Create(zipwin.CreateOptions{
 		Source: flags.Arg(0),
 		Dest:   flags.Arg(1),
+		Stderr: stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "zip2win: %v\n", err)
