@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // writeRawZip は検査用に任意のヘッダを持つ ZIP を作る。Writer は名前を検証しないので
@@ -112,7 +114,8 @@ func TestInspect_DetectsProblems(t *testing.T) {
 	}
 	dups := 0
 	for _, e := range r.Entries {
-		if e.Name == "dup.txt" && hasProblem(e, "duplicate") {
+		// バイト単位で同名の重複は、正規化後の重複と区別できるメッセージにする。
+		if e.Name == "dup.txt" && slices.Contains(e.Problems, "duplicate entry name") {
 			dups++
 		}
 	}
@@ -121,6 +124,47 @@ func TestInspect_DetectsProblems(t *testing.T) {
 	}
 	if e := findEntry(t, r, "fine.txt"); len(e.Problems) != 0 {
 		t.Errorf("fine.txt should have no problems, got %v", e.Problems)
+	}
+}
+
+// TestInspect_FlagsNonNFCName は NFD のままのエントリ名を報告することを確認する。
+// Windows は NFC 前提で表示するため、NFD 名は結合文字が分かれて見えることがある。
+func TestInspect_FlagsNonNFCName(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "nfd.zip")
+	nfd := norm.NFD.String("が.txt") // か + 結合濁点 (U+304B U+3099)
+	writeRawZip(t, path, []*zip.FileHeader{{Name: nfd, Flags: utf8Flag}})
+
+	r, err := Inspect(path)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if e := findEntry(t, r, nfd); !hasProblem(e, "NFC") {
+		t.Errorf("problems = %v, want a not-NFC problem", e.Problems)
+	}
+}
+
+// TestInspect_FlagsDuplicateAfterNFC は NFC 正規化すると同名になる 2 エントリを
+// 重複として報告することを確認する。Windows で展開すると同じパスに書かれる。
+func TestInspect_FlagsDuplicateAfterNFC(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "dup.zip")
+	nfc := "が.txt"
+	nfd := norm.NFD.String(nfc)
+	writeRawZip(t, path, []*zip.FileHeader{
+		{Name: nfc, Flags: utf8Flag},
+		{Name: nfd, Flags: utf8Flag},
+	})
+
+	r, err := Inspect(path)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if e := findEntry(t, r, nfc); len(e.Problems) != 0 {
+		t.Errorf("first (NFC) entry: problems = %v, want none", e.Problems)
+	}
+	if e := findEntry(t, r, nfd); !hasProblem(e, "duplicate entry name after NFC normalization") {
+		t.Errorf("second (NFD) entry: problems = %v, want duplicate-after-NFC", e.Problems)
 	}
 }
 

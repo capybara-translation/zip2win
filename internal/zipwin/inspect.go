@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Entry は ZIP 内 1 エントリの検査結果。
@@ -44,13 +46,22 @@ func Inspect(path string) (*Report, error) {
 	defer zr.Close()
 
 	report := &Report{Entries: make([]Entry, 0, len(zr.File))}
-	seen := make(map[string]bool, len(zr.File))
+	// 重複判定は NFC 正規化後の名前をキーにする。値は最初に現れた正規化前の名前で、
+	// バイト単位の重複と「正規化して初めて衝突する重複」を区別するために持つ。
+	// Windows は NFC で名前を扱うため、後者も展開時には同じパスへ書かれてしまう。
+	seen := make(map[string]string, len(zr.File))
 	for _, f := range zr.File {
 		e := Entry{Name: f.Name, Flags: f.Flags, Problems: checkName(f.Name, f.Flags)}
-		if seen[f.Name] {
-			e.Problems = append(e.Problems, "duplicate entry name")
+		key := norm.NFC.String(f.Name)
+		if prev, dup := seen[key]; dup {
+			if prev == f.Name {
+				e.Problems = append(e.Problems, "duplicate entry name")
+			} else {
+				e.Problems = append(e.Problems, "duplicate entry name after NFC normalization")
+			}
+		} else {
+			seen[key] = f.Name
 		}
-		seen[f.Name] = true
 		report.Entries = append(report.Entries, e)
 	}
 	return report, nil
@@ -64,6 +75,10 @@ func checkName(name string, flags uint16) []string {
 	}
 	if !utf8.ValidString(name) {
 		problems = append(problems, "name is not valid UTF-8")
+	} else if norm.NFC.String(name) != name {
+		// NFD のままの名前（macOS 由来）は Windows で結合文字が分かれて見えることがあり、
+		// NFC の同名エントリと衝突もする。不正な UTF-8 では正規化結果が信用できないので見ない。
+		problems = append(problems, "name is not NFC-normalized")
 	}
 	// 以下は解凍側でパストラバーサルの素材になる名前。
 	if strings.Contains(name, `\`) {
