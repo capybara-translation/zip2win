@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -66,21 +65,28 @@ func Create(opts CreateOptions) error {
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return fmt.Errorf("source %q is a symbolic link", opts.Source)
 	}
-	// symlink による別名（macOS の /tmp と /private/tmp など）を解決しておかないと、
-	// Source と Dest が実体として同じ場所でも文字列比較では一致せず、
-	// 自己取り込み防止（下記 excluded）が効かなくなる。
+	// 走査するパスを実体のパスに寄せておく（macOS の /tmp と /private/tmp のような別名の解決）。
 	// 末尾コンポーネントが symlink でないことは直前の Lstat で確認済みなので、
 	// ここで解決してもアーカイブのルート名（filepath.Base）は変わらない。
 	srcAbs, err = filepath.EvalSymlinks(srcAbs)
 	if err != nil {
-		return fmt.Errorf("resolve source path: %w", err)
+		return fmt.Errorf("resolve source symlinks: %w", err)
 	}
 	// dstAbs はまだ存在しないことがあるため本体は解決できない。親ディレクトリだけ解決して結合する。
+	// これは出力先ディレクトリが存在することの確認も兼ねる。
 	dstDir, err := filepath.EvalSymlinks(filepath.Dir(dstAbs))
 	if err != nil {
 		return fmt.Errorf("resolve destination directory: %w", err)
 	}
 	dstAbs = filepath.Join(dstDir, filepath.Base(dstAbs))
+
+	// 単一ファイル入力で Source と Dest が同じ実体だと、--force 付きの rename が
+	// 元ファイルを ZIP で置き換えてしまう（入力データの喪失）。
+	if !info.IsDir() {
+		if dstInfo, err := os.Lstat(dstAbs); err == nil && os.SameFile(info, dstInfo) {
+			return errors.New("source and destination are the same file")
+		}
+	}
 
 	if err := checkDest(dstAbs, opts.Force); err != nil {
 		return err
@@ -105,11 +111,26 @@ func Create(opts CreateOptions) error {
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	// 自己取り込み防止の基準はパス文字列ではなくファイル実体にする。
+	// 一時ファイルの情報は開いた fd から取る（開いた直後に差し替えられても取り違えない）。
+	var excluded []fs.FileInfo
+	tmpInfo, err := out.Stat()
+	if err != nil {
+		_ = out.Close()
+		return fmt.Errorf("stat temporary file: %w", err)
+	}
+	excluded = append(excluded, tmpInfo)
+	// Dest は --force での上書き時にだけ存在する。symlink なら rename で置き換わる側なので
+	// リンク先ではなく symlink 自身の実体を覚える（走査側も symlink を追跡しない）。
+	if dstInfo, err := os.Lstat(dstAbs); err == nil {
+		excluded = append(excluded, dstInfo)
+	}
+
 	zw := zip.NewWriter(out)
 	c := &creator{
 		zw:       zw,
 		base:     filepath.Dir(srcAbs),
-		excluded: []string{dstAbs, tmpPath},
+		excluded: excluded,
 		stderr:   stderr,
 		seen:     map[string]string{},
 	}
@@ -157,8 +178,10 @@ type creator struct {
 	zw *zip.Writer
 	// base は ZIP 内パスの基準ディレクトリ。Source の親なので Source 名がルートになる。
 	base string
-	// excluded は走査中に出会っても取り込まない絶対パス（出力 ZIP 自身など）。
-	excluded []string
+	// excluded は走査中に出会っても取り込まないファイル実体（出力 ZIP 自身と一時ファイル）。
+	// パス文字列ではなく os.SameFile で比較するので、大文字小文字を区別しない
+	// ファイルシステムでの綴り違いやハードリンク経由の別名でも取りこぼさない。
+	excluded []fs.FileInfo
 	// stderr はスキップ通知の出力先。
 	stderr io.Writer
 	// seen は正規化後の名前 -> 正規化前の相対パス。NFC 正規化で別ファイルが同名になる衝突を検出する。
@@ -175,14 +198,19 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		// 出力 ZIP が入力ディレクトリ内にあると、書きかけの自分自身を読み込んでしまう。
-		if slices.Contains(c.excluded, path) {
-			return nil
-		}
 		if isMacMetadata(d.Name()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		// d.Info() は symlink を辿らない (Lstat 相当)。
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		// 出力 ZIP が入力ディレクトリ内にあると、書きかけの自分自身を読み込んでしまう。
+		if c.isExcluded(info) {
 			return nil
 		}
 		// WalkDir は symlink を辿らない。リンク先の意図しないファイル取り込みやループを避けるため
@@ -190,10 +218,6 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		if d.Type()&fs.ModeSymlink != 0 {
 			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", path)
 			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
 		}
 		// FIFO・ソケット・デバイスファイルは ZIP に入れられないうえ、os.Open が
 		// 読み手を待って無限にブロックすることがある（FIFO）。symlink と同様に通知して飛ばす。
@@ -203,6 +227,16 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		}
 		return c.add(path, info)
 	})
+}
+
+// isExcluded は info が取り込み対象外のファイル実体なら true。
+func (c *creator) isExcluded(info fs.FileInfo) bool {
+	for _, ex := range c.excluded {
+		if os.SameFile(info, ex) {
+			return true
+		}
+	}
+	return false
 }
 
 // isMacMetadata は macOS が生成するメタデータファイル・フォルダ名なら true。

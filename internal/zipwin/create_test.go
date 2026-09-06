@@ -339,6 +339,45 @@ func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 	}
 }
 
+// TestCreate_DoesNotIncludeItselfCaseInsensitive は大文字小文字を区別しないファイルシステム
+// (APFS / NTFS の既定) で、Source と Dest の綴りだけが違う場合でも自己取り込みを防げることを確認する。
+// パス文字列の比較では防げず、ファイル実体の同一性 (os.SameFile) で判定する必要がある。
+func TestCreate_DoesNotIncludeItselfCaseInsensitive(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "SRC")
+	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+	// 実際に大文字小文字を無視するファイルシステムかを確認してから進む。
+	if _, err := os.Stat(filepath.Join(tmp, "src")); err != nil {
+		t.Skip("filesystem is case-sensitive; the alias cannot occur here")
+	}
+	dst := filepath.Join(tmp, "src", "out.zip") // 同じディレクトリを別の綴りで指す
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"SRC/", "SRC/a.txt"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+}
+
+// TestCreate_SingleFileSourceIsDestIsError は単一ファイル入力で Source と Dest が
+// 同じ実体のとき、rename で元ファイルを ZIP に置き換えて壊さないことを確認する。
+func TestCreate_SingleFileSourceIsDestIsError(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "メモ.txt")
+	mustWrite(t, src, "memo")
+
+	err := Create(CreateOptions{Source: src, Dest: src, Force: true})
+	if err == nil || !strings.Contains(err.Error(), "same file") {
+		t.Fatalf("err = %v, want 'same file' error", err)
+	}
+	if b, _ := os.ReadFile(src); string(b) != "memo" {
+		t.Errorf("source file was replaced: %q", b)
+	}
+}
+
 func newSourceDir(t *testing.T, tmp string) string {
 	t.Helper()
 	src := filepath.Join(tmp, "docs")
