@@ -2,9 +2,11 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"zip2win/internal/zipwin"
 )
 
 const usageText = `Usage:
@@ -29,9 +31,34 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText)
 		return 0
+	case "create":
+		return runCreate(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "zip2win: unknown command %q\n", args[0])
 		fmt.Fprint(stderr, usageText)
 		return 2
 	}
+}
+
+// runCreate は create サブコマンドを実行する。
+func runCreate(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("create", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() { fmt.Fprint(stderr, usageText) }
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 2 {
+		fmt.Fprint(stderr, usageText)
+		return 2
+	}
+	err := zipwin.Create(zipwin.CreateOptions{
+		Source: flags.Arg(0),
+		Dest:   flags.Arg(1),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "zip2win: %v\n", err)
+		return 1
+	}
+	return 0
 }
