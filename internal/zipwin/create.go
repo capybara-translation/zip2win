@@ -49,8 +49,14 @@ func Create(opts CreateOptions) error {
 		return fmt.Errorf("resolve destination path: %w", err)
 	}
 	// "/" や "." を渡されるとルートフォルダ名が作れない。
-	if base := filepath.Base(srcAbs); base == "." || base == string(filepath.Separator) {
+	base := filepath.Base(srcAbs)
+	if base == "." || base == string(filepath.Separator) {
 		return fmt.Errorf("source %q has no name to use as the archive root", opts.Source)
+	}
+	// Source 自身が除外ルールに該当すると、走査結果が空、または（__MACOSX 配下のように）
+	// 中身が丸ごと落ちたアーカイブが黙って出来上がる。指定ミスとして扱う。
+	if isMacMetadata(base) {
+		return fmt.Errorf("source %q is an excluded macOS metadata name", opts.Source)
 	}
 	// Lstat: Source 自体が symlink なら追跡せずエラーにする（symlink 非追跡の方針を root にも適用）。
 	info, err := os.Lstat(srcAbs)
@@ -188,6 +194,12 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 		info, err := d.Info()
 		if err != nil {
 			return err
+		}
+		// FIFO・ソケット・デバイスファイルは ZIP に入れられないうえ、os.Open が
+		// 読み手を待って無限にブロックすることがある（FIFO）。symlink と同様に通知して飛ばす。
+		if !info.Mode().IsRegular() && !info.IsDir() {
+			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", path)
+			return nil
 		}
 		return c.add(path, info)
 	})

@@ -187,6 +187,27 @@ func TestCreate_MissingSource(t *testing.T) {
 	}
 }
 
+// TestCreate_MacMetadataSourceIsError は除外ルールに引っかかる名前を Source に指定したとき、
+// 黙って空（または中身が抜けた）アーカイブを作らずエラーになることを確認する。
+func TestCreate_MacMetadataSourceIsError(t *testing.T) {
+	for _, name := range []string{"__MACOSX", ".DS_Store", "._x"} {
+		t.Run(name, func(t *testing.T) {
+			tmp := t.TempDir()
+			src := filepath.Join(tmp, name)
+			if name == "__MACOSX" {
+				mustWrite(t, filepath.Join(src, "a.txt"), "a")
+			} else {
+				mustWrite(t, src, "a")
+			}
+
+			err := Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")})
+			if err == nil || !strings.Contains(err.Error(), "excluded macOS metadata name") {
+				t.Errorf("err = %v, want excluded macOS metadata name error", err)
+			}
+		})
+	}
+}
+
 func TestCreate_ExcludesMacMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")
