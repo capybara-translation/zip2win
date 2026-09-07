@@ -1,4 +1,4 @@
-module zip2win
+module github.com/capybara-translation/zip2win
 
 go 1.25.5
 

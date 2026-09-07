@@ -4,9 +4,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/capybara-translation/zip2win/internal/zipwin"
 	"io"
 	"os"
-	"zip2win/internal/zipwin"
 )
 
 const usageText = `Usage:
