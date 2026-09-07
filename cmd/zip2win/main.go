@@ -1,4 +1,5 @@
-// zip2win は Windows の標準機能で展開しても文字化けしない ZIP を作成・検査する CLI。
+// zip2win is a CLI that creates and inspects ZIP archives whose file names
+// survive extraction with Windows' built-in tools (Explorer) without mojibake.
 package main
 
 import (
@@ -20,12 +21,12 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run はサブコマンドを振り分け、exit code を返す。
-// os.Exit を直接呼ばないのはテストから呼べるようにするため。
+// run dispatches to a subcommand and returns the exit code.
+// It doesn't call os.Exit directly so tests can call it.
 //
-// エラーは必ず zipwin.DisplayName を通してから stderr へ出す。
-// *fs.PathError などに包まれたファイル名がそのまま端末へ流れると、
-// 名前に仕込まれたエスケープシーケンスで表示を操作されうる。
+// Errors are always passed through zipwin.DisplayName before going to stderr.
+// If a file name wrapped in something like *fs.PathError reached the terminal
+// unescaped, an escape sequence embedded in the name could hijack the display.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usageText)
@@ -46,7 +47,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// runCreate は create サブコマンドを実行する。
+// runCreate runs the create subcommand.
 func runCreate(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -72,7 +73,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runInspect は inspect サブコマンドを実行する。検査 NG も exit 1。
+// runInspect runs the inspect subcommand. Inspection failures also exit 1.
 func runInspect(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprint(stderr, usageText)

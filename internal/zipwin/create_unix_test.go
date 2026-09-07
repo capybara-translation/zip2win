@@ -14,9 +14,11 @@ import (
 	"testing"
 )
 
-// TestCreate_NonRegularSourceIsError は Source 自体が FIFO のような非通常ファイルのとき、
-// 開いてブロックする前にエラーで返ることを確認する（単一ファイル入力は走査を通らないため
-// ディレクトリ内のスキップ処理では守られない）。返らない実装ではテストがタイムアウトする。
+// TestCreate_NonRegularSourceIsError confirms that when Source itself is a
+// non-regular file such as a FIFO, Create errors out before opening it would
+// block (a single-file source never goes through the walk, so the directory
+// skip logic can't protect it here). An implementation that fails to return
+// would time out this test.
 func TestCreate_NonRegularSourceIsError(t *testing.T) {
 	tmp := t.TempDir()
 	fifo := filepath.Join(tmp, "pipe")
@@ -29,7 +31,7 @@ func TestCreate_NonRegularSourceIsError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("err = %v, want 'not a regular file' error", err)
 	}
-	// 一時ファイルを作る前に弾く必要がある（後始末に頼らない）。
+	// This must be rejected before a temp file is created (not left to cleanup afterward).
 	for _, p := range []string{dst, dst + ".tmp"} {
 		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s should not exist (err=%v)", p, err)
@@ -37,10 +39,11 @@ func TestCreate_NonRegularSourceIsError(t *testing.T) {
 	}
 }
 
-// TestCreate_SkipsNonRegularFileWithNotice は FIFO のような「通常ファイルでもディレクトリでもない」
-// エントリをスキップすることを確認する。開こうとすると読み手が来るまでブロックするため、
-// スキップしないと Create が返らなくなる。
-// syscall.Mkfifo を使うのでこのファイルは unix 限定。
+// TestCreate_SkipsNonRegularFileWithNotice confirms that an entry that is
+// "neither a regular file nor a directory", such as a FIFO, gets skipped.
+// Opening it would block until a reader shows up, so without the skip Create
+// would never return.
+// This file is unix-only because it uses syscall.Mkfifo.
 func TestCreate_SkipsNonRegularFileWithNotice(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")

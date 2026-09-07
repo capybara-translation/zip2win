@@ -1,74 +1,82 @@
 # zip2win
 
-Windows の標準機能（エクスプローラー）で展開しても日本語ファイル名が文字化けしない ZIP を作る CLI。
-macOS / Linux / Windows で動く。
+A CLI that creates ZIP archives whose Japanese file names don't turn into
+mojibake when extracted with Windows' built-in tools (Explorer).
+Runs on macOS, Linux, and Windows.
 
-## インストール
+## Install
 
 ```bash
-go install ./cmd/zip2win
+go install github.com/capybara-translation/zip2win/cmd/zip2win@latest
 ```
 
-## 使い方
+## Usage
 
 ```bash
-# ディレクトリ（またはファイル）を ZIP にする。docs/ の中身は docs/... として格納される
+# Archive a directory (or file) into a ZIP. The contents of docs/ are stored as docs/...
 zip2win create docs docs.zip
 
-# 既存の出力先を上書きする
+# Overwrite an existing output file
 zip2win create --force docs docs.zip
 
-# ZIP を検査する（全エントリ OK なら exit 0、問題があれば exit 1）
+# Inspect a ZIP (exit 0 if every entry is OK, exit 1 if there's a problem)
 zip2win inspect docs.zip
 ```
 
-フラグは位置引数より前に置く。
+Flags must come before positional arguments.
 
-## 何をしているか
+## What it does
 
-| 項目 | 方針 |
+| Item | Policy |
 |---|---|
-| ファイル名 | UTF-8 で格納し、EFS フラグ (General Purpose Bit Flag bit 11) を全エントリで明示 |
-| Unicode 正規化 | NFC（macOS 由来の NFD 名を変換） |
-| パス区切り | `/` |
-| 除外 | `.DS_Store`、`._*`、`__MACOSX/`、シンボリックリンク（スキップ時に stderr へ通知。`<source>` 自体が symlink の場合はエラー） |
-| 通常ファイル以外（FIFO・ソケット・デバイス） | 走査中に見つけたものは stderr へ通知してスキップ。`<source>` 自体がそれならエラー（ZIP に格納できず、FIFO は開くとブロックするため） |
-| `<source>` 自体が除外対象の名前 | エラー（`.DS_Store`、`._*`、`__MACOSX`。中身が空・欠落したアーカイブを黙って作らない） |
-| NFC 正規化後に名前が衝突 | エラー（同一パスのエントリが複数ある ZIP を作らない） |
-| バックスラッシュを含む名前 | 警告を出して続行。`inspect` は NG として報告 |
-| 出力先が既存 | エラー。`--force` で上書き（出力先がディレクトリの場合は `--force` でもエラー） |
-| 書き込み | 一時ファイル `<出力先>.tmp`（例: `docs.zip` → `docs.zip.tmp`）に書いて完成後に rename。途中失敗で壊れた ZIP を残さない。取り残された `.tmp` があるとエラー。`--force` なら通知を出して取り除く（`<source>` と同じ実体ならエラー） |
-| 出力 ZIP が入力ディレクトリ内 | 自分自身は取り込まない |
+| File names | Stored as UTF-8, with the EFS flag (General Purpose Bit Flag bit 11) explicitly set on every entry |
+| Unicode normalization | NFC (converts macOS-originated NFD names) |
+| Path separator | `/` |
+| Exclusions | `.DS_Store`, `._*`, `__MACOSX/`, symbolic links (a notice is written to stderr when one is skipped; an error if `<source>` itself is a symlink) |
+| Non-regular files (FIFOs, sockets, device files) | Notified on stderr and skipped when found during the walk; an error if `<source>` itself is one (it can't be stored in a ZIP, and a FIFO blocks when opened) |
+| `<source>` itself is an excluded name | Error (`.DS_Store`, `._*`, `__MACOSX`; this avoids silently producing an empty or partly-missing archive) |
+| Name collision after NFC normalization | Error (never produces a ZIP with more than one entry at the same path) |
+| Names containing a backslash | A warning is printed and the run continues; `inspect` reports it as a problem |
+| Destination already exists | Error, unless `--force` is given to overwrite it (a directory destination is always an error, even with `--force`) |
+| Writing | Written to a temp file `<output>.tmp` (e.g. `docs.zip` -> `docs.zip.tmp`) and renamed into place once complete, so a failure partway through never leaves a broken ZIP behind. A leftover `.tmp` file is an error; with `--force` it's removed with a notice (an error if it's the same file as `<source>`) |
+| Output ZIP inside the input directory | Never includes itself |
 
-Windows 予約名（`CON` など）や Windows で使えない文字（`: * ? " < > |`）は検査・変換しない。
-展開環境が Windows とは限らないため。
+Windows reserved names (like `CON`) and characters that are invalid on
+Windows (`: * ? " < > |`) are deliberately not checked or rewritten, since the
+extraction target isn't necessarily Windows.
 
-## inspect が報告する問題
+## What `inspect` reports
 
-- EFS フラグなし、UTF-8 として不正な名前
-- NFC 正規化されていない名前（NFD のまま）
-- `..` を含むパス、絶対パス、バックスラッシュ区切り（解凍側のパストラバーサル素材）
-- macOS メタデータファイルの混入
-- 重複するエントリ名（NFC 正規化して初めて同名になる組も報告する）
+- The EFS flag not set, or a name that isn't valid UTF-8
+- A name that isn't NFC-normalized (still in NFD)
+- A path containing `..`, an absolute path, or a backslash-separated path (material for path traversal on the extracting side)
+- macOS metadata files mixed into the archive
+- Duplicate entry names (including pairs that only become identical after NFC normalization)
 
-表示時、エントリ名の制御文字はエスケープされる（端末エスケープシーケンス注入対策）。
+When displayed, control characters in entry names are escaped (to prevent terminal escape-sequence injection).
 
-## Windows 実機での検証手順
+## Verifying on a real Windows machine
 
-EFS が正しくても、パス長・権限・セキュリティ製品などで展開に失敗することはある。
-納品前は対象と同等の Windows 環境で必ず実展開する。
+Even with EFS set correctly, extraction can still fail because of path
+length, permissions, or security software. Always extract for real on a
+Windows environment equivalent to the target before delivery.
 
-1. Windows 向けにビルドする
+1. Build for Windows
    ```bash
    GOOS=windows GOARCH=amd64 go build -o zip2win.exe ./cmd/zip2win
    ```
-2. 検証用フォルダを用意する（ASCII 名、日本語名、スペース入り、空フォルダ、深い階層を含める）
-3. `zip2win.exe create <folder> test.zip` で ZIP を作る
-4. `zip2win.exe inspect test.zip` が exit 0 になることを確認する
-5. エクスプローラーで `test.zip` を右クリック →「すべて展開」
-6. 展開後のファイル名が文字化けしていないこと、空フォルダが再現されていることを確認する
+2. Prepare a test folder (include ASCII names, Japanese names, names with spaces, an empty folder, and a deep hierarchy)
+3. Create the ZIP with `zip2win.exe create <folder> test.zip`
+4. Confirm `zip2win.exe inspect test.zip` exits 0
+5. Right-click `test.zip` in Explorer and choose "Extract All"
+6. Confirm the extracted file names aren't garbled and that empty folders were reproduced
 
-## 既知の限界
+## Known limitations
 
-- 出力先の存在チェックと rename の間に理論上の TOCTOU 窓がある（単一ユーザーの CLI として許容）
-- あらゆる Windows 環境・古い ZIP ソフトとの 100% 互換は保証しない
+- There's a theoretical TOCTOU window between checking that the destination doesn't exist and the rename
+- 100% compatibility with every Windows environment and older ZIP software is not guaranteed
+- The NFC-collision tests are skipped on macOS/APFS, since that file system merges NFC/NFD names before zip2win ever sees the difference
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -10,9 +10,10 @@ import (
 	"testing"
 )
 
-// TestRun_EscapesControlCharactersInErrorOutput はエラー内容の出力経路でも端末エスケープを
-// 通さないことを確認する。エラーは *fs.PathError などに包まれてファイル名を運ぶので、
-// zipwin 側の通知だけをエスケープしても生の ESC が stderr に届いてしまう。
+// TestRun_EscapesControlCharactersInErrorOutput confirms that the error-output
+// path also never lets a terminal escape through. Errors carry file names
+// wrapped in things like *fs.PathError, so escaping only zipwin's own notices
+// would still let a raw ESC reach stderr.
 func TestRun_EscapesControlCharactersInErrorOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 0 does not block reads on Windows")
@@ -195,7 +196,8 @@ func TestRun_InspectBadZipReturnsOne(t *testing.T) {
 	}
 }
 
-// TestRun_InspectMissingFileIsRuntimeError は検査 NG ではなく読み取り失敗の経路を確認する。
+// TestRun_InspectMissingFileIsRuntimeError checks the read-failure path, as
+// opposed to a failed inspection.
 func TestRun_InspectMissingFileIsRuntimeError(t *testing.T) {
 	tmp := t.TempDir()
 	var stdout, stderr bytes.Buffer

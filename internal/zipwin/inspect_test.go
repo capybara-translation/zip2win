@@ -12,8 +12,9 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// writeRawZip は検査用に任意のヘッダを持つ ZIP を作る。Writer は名前を検証しないので
-// "../" や重複名のような不正な ZIP も作れる。
+// writeRawZip builds a ZIP with arbitrary headers, for inspection tests.
+// Since the Writer doesn't validate names, this can also build invalid ZIPs
+// such as ones containing "../" or duplicate names.
 func writeRawZip(t *testing.T, path string, headers []*zip.FileHeader) {
 	t.Helper()
 	f, err := os.Create(path)
@@ -81,14 +82,14 @@ func TestInspect_DetectsProblems(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "bad.zip")
 	writeRawZip(t, path, []*zip.FileHeader{
-		{Name: "日本語.txt", NonUTF8: true}, // EFS なし
-		{Name: "../evil.txt"},            // パストラバーサル
-		{Name: "/abs.txt"},               // 絶対パス
-		{Name: `dir\file.txt`},           // バックスラッシュ
-		{Name: ".DS_Store"},              // Mac メタデータ
-		{Name: "sub/._x"},                // Mac メタデータ（サブディレクトリ）
+		{Name: "日本語.txt", NonUTF8: true}, // no EFS
+		{Name: "../evil.txt"},            // path traversal
+		{Name: "/abs.txt"},               // absolute path
+		{Name: `dir\file.txt`},           // backslash
+		{Name: ".DS_Store"},              // Mac metadata
+		{Name: "sub/._x"},                // Mac metadata (in a subdirectory)
 		{Name: "dup.txt"},
-		{Name: "dup.txt"}, // 重複
+		{Name: "dup.txt"}, // duplicate
 		{Name: "fine.txt", Flags: utf8Flag},
 	})
 
@@ -114,7 +115,7 @@ func TestInspect_DetectsProblems(t *testing.T) {
 	}
 	dups := 0
 	for _, e := range r.Entries {
-		// バイト単位で同名の重複は、正規化後の重複と区別できるメッセージにする。
+		// A byte-for-byte duplicate name gets a message distinguishable from a normalization-only duplicate.
 		if e.Name == "dup.txt" && slices.Contains(e.Problems, "duplicate entry name") {
 			dups++
 		}
@@ -127,12 +128,13 @@ func TestInspect_DetectsProblems(t *testing.T) {
 	}
 }
 
-// TestInspect_FlagsNonNFCName は NFD のままのエントリ名を報告することを確認する。
-// Windows は NFC 前提で表示するため、NFD 名は結合文字が分かれて見えることがある。
+// TestInspect_FlagsNonNFCName confirms that an entry name left in NFD is
+// reported. Windows displays and compares names assuming NFC, so an NFD name
+// can show its combining characters split apart.
 func TestInspect_FlagsNonNFCName(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "nfd.zip")
-	nfd := norm.NFD.String("が.txt") // か + 結合濁点 (U+304B U+3099)
+	nfd := norm.NFD.String("が.txt") // U+304B + combining dakuten (U+3099)
 	writeRawZip(t, path, []*zip.FileHeader{{Name: nfd, Flags: utf8Flag}})
 
 	r, err := Inspect(path)
@@ -144,8 +146,9 @@ func TestInspect_FlagsNonNFCName(t *testing.T) {
 	}
 }
 
-// TestInspect_FlagsDuplicateAfterNFC は NFC 正規化すると同名になる 2 エントリを
-// 重複として報告することを確認する。Windows で展開すると同じパスに書かれる。
+// TestInspect_FlagsDuplicateAfterNFC confirms that two entries that become
+// the same name once NFC-normalized are reported as duplicates. Extracting
+// them on Windows would write both to the same path.
 func TestInspect_FlagsDuplicateAfterNFC(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "dup.zip")
@@ -169,7 +172,7 @@ func TestInspect_FlagsDuplicateAfterNFC(t *testing.T) {
 }
 
 func TestInspect_ASCIIWithoutEFSIsFlagged(t *testing.T) {
-	// 運用ルールとして全エントリ EFS 必須なので、ASCII 名でも EFS なしは NG。
+	// The policy requires EFS on every entry, so even an ASCII name without EFS is flagged.
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "ascii.zip")
 	writeRawZip(t, path, []*zip.FileHeader{{Name: "plain.txt"}})
@@ -183,8 +186,9 @@ func TestInspect_ASCIIWithoutEFSIsFlagged(t *testing.T) {
 	}
 }
 
-// TestInspect_DriveLetterOnlyForASCIILetter は 2 文字目の ':' だけを見て
-// 絶対パス扱いしないことを確認する。ドライブレターは ASCII 英字に限られる。
+// TestInspect_DriveLetterOnlyForASCIILetter confirms that a ':' as the second
+// character alone doesn't get treated as an absolute path. A drive letter is
+// limited to an ASCII letter.
 func TestInspect_DriveLetterOnlyForASCIILetter(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "drive.zip")
@@ -205,8 +209,8 @@ func TestInspect_DriveLetterOnlyForASCIILetter(t *testing.T) {
 	}
 }
 
-// TestCreateThenInspect_IsOK は create が作った ZIP を inspect が必ず OK と判定する
-// ラウンドトリップ不変条件のテスト。両者の仕様がずれたらここで落ちる。
+// TestCreateThenInspect_IsOK is a round-trip invariant test: inspect must
+// always judge a ZIP created by create to be OK. If the two ever drift apart, this catches it.
 func TestCreateThenInspect_IsOK(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "配布 資料")
@@ -233,7 +237,8 @@ func TestCreateThenInspect_IsOK(t *testing.T) {
 			}
 		}
 	}
-	// ルート, readme.txt, 日本語 名前.txt, が.txt, sub/, sub/深い階層/, その中の file.txt, 空フォルダ/
+	// root, readme.txt, the Japanese-named-with-space file, the NFD-normalized file,
+	// sub/, the nested deep-hierarchy directory under it, the file.txt inside that, and the empty folder
 	if len(r.Entries) != 8 {
 		t.Errorf("got %d entries, want 8: %+v", len(r.Entries), r.Entries)
 	}

@@ -12,20 +12,20 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Entry は ZIP 内 1 エントリの検査結果。
+// Entry is the inspection result for one entry in the ZIP.
 type Entry struct {
 	Name  string
 	Flags uint16
-	// Problems は検出した問題。空なら問題なし。
+	// Problems lists the problems found. Empty means no problems.
 	Problems []string
 }
 
-// Report は Inspect の結果。
+// Report is the result of Inspect.
 type Report struct {
 	Entries []Entry
 }
 
-// OK は全エントリに問題がなければ true。
+// OK reports whether every entry is free of problems.
 func (r *Report) OK() bool {
 	for _, e := range r.Entries {
 		if len(e.Problems) > 0 {
@@ -35,20 +35,23 @@ func (r *Report) OK() bool {
 	return true
 }
 
-// Inspect は path の ZIP の中央ディレクトリを読んで各エントリを検査する。展開は行わない。
+// Inspect reads path's ZIP central directory and checks each entry. It never extracts anything.
 func Inspect(path string) (*Report, error) {
 	zr, err := zip.OpenReader(path)
-	// GODEBUG=zipinsecurepath=0 のとき、".." や絶対パスを含む ZIP は ErrInsecurePath 付きで返る。
-	// reader 自体は使えるので、検査ツールとしてはそのまま読んで問題を報告する。
+	// With GODEBUG=zipinsecurepath=0, a ZIP containing ".." or an absolute path
+	// is returned along with ErrInsecurePath. The reader itself is still
+	// usable, so as an inspection tool we read it anyway and report the problem.
 	if err != nil && !errors.Is(err, zip.ErrInsecurePath) {
 		return nil, fmt.Errorf("open zip: %w", err)
 	}
 	defer zr.Close()
 
 	report := &Report{Entries: make([]Entry, 0, len(zr.File))}
-	// 重複判定は NFC 正規化後の名前をキーにする。値は最初に現れた正規化前の名前で、
-	// バイト単位の重複と「正規化して初めて衝突する重複」を区別するために持つ。
-	// Windows は NFC で名前を扱うため、後者も展開時には同じパスへ書かれてしまう。
+	// Duplicate detection keys on the NFC-normalized name. The value is the
+	// un-normalized name of the first occurrence, kept so a byte-for-byte
+	// duplicate can be distinguished from one that only collides after
+	// normalization. Windows treats names as NFC, so the latter also ends up
+	// written to the same path on extraction.
 	seen := make(map[string]string, len(zr.File))
 	for _, f := range zr.File {
 		e := Entry{Name: f.Name, Flags: f.Flags, Problems: checkName(f.Name, f.Flags)}
@@ -67,7 +70,7 @@ func Inspect(path string) (*Report, error) {
 	return report, nil
 }
 
-// checkName は名前とフラグに関する問題を列挙する。
+// checkName lists the problems found with name and flags.
 func checkName(name string, flags uint16) []string {
 	var problems []string
 	if flags&utf8Flag == 0 {
@@ -76,16 +79,19 @@ func checkName(name string, flags uint16) []string {
 	if !utf8.ValidString(name) {
 		problems = append(problems, "name is not valid UTF-8")
 	} else if norm.NFC.String(name) != name {
-		// NFD のままの名前（macOS 由来）は Windows で結合文字が分かれて見えることがあり、
-		// NFC の同名エントリと衝突もする。不正な UTF-8 では正規化結果が信用できないので見ない。
+		// A name left in NFD (as macOS produces) can show its combining
+		// characters split apart on Windows, and can also collide with an
+		// NFC entry of the same name. Skipped for invalid UTF-8, since the
+		// normalization result can't be trusted there.
 		problems = append(problems, "name is not NFC-normalized")
 	}
-	// 以下は解凍側でパストラバーサルの素材になる名前。
+	// The following are names that can serve as path-traversal material on the extracting side.
 	if strings.Contains(name, `\`) {
 		problems = append(problems, "backslash in name")
 	}
-	// ドライブレターは ASCII 英字 1 文字に限られる。':' だけを見ると "1:2.txt" のような
-	// 単なるコロン入りの名前まで絶対パス扱いしてしまう。
+	// A drive letter is limited to a single ASCII letter. Looking at ':' alone
+	// would misclassify a merely colon-containing name like "1:2.txt" as an
+	// absolute path too.
 	if strings.HasPrefix(name, "/") || (len(name) >= 2 && name[1] == ':' && isASCIILetter(name[0])) {
 		problems = append(problems, "absolute path")
 	}
@@ -104,12 +110,12 @@ func checkName(name string, flags uint16) []string {
 	return problems
 }
 
-// isASCIILetter は Windows のドライブレターに使える文字なら true。
+// isASCIILetter reports whether b is a character usable as a Windows drive letter.
 func isASCIILetter(b byte) bool {
 	return ('A' <= b && b <= 'Z') || ('a' <= b && b <= 'z')
 }
 
-// Format は人が読める形で結果を w に書き出す。
+// Format writes the result to w in a human-readable form.
 func (r *Report) Format(w io.Writer) error {
 	for _, e := range r.Entries {
 		status := "ok"
@@ -124,12 +130,13 @@ func (r *Report) Format(w io.Writer) error {
 	return nil
 }
 
-// DisplayName は端末へ安全に表示できるよう制御文字と不正バイトをエスケープする。
-// 悪意ある ZIP のエントリ名やファイル名にエスケープシーケンスが含まれていても
-// 端末を操作されないようにする。
-// エントリ名だけでなく、ファイル名を含みうるエラーメッセージ全体にも適用する
-// （*fs.PathError のように名前が包まれて運ばれる経路があるため）。
-// 改行は制御文字としてエスケープされるので、1 行 1 メッセージの出力も崩れない。
+// DisplayName escapes control characters and invalid bytes so name can be
+// shown on a terminal safely. This keeps a malicious ZIP's entry name (or a
+// file name) from hijacking the terminal even if it embeds an escape sequence.
+// It's meant to be applied not just to entry names but to any error message
+// that might carry a file name (such as one wrapped in *fs.PathError).
+// Newlines are escaped as control characters too, so one-message-per-line
+// output can't be broken by an embedded newline.
 func DisplayName(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); {

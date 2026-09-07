@@ -1,9 +1,10 @@
-// Package zipwin は Windows の標準機能で展開しても文字化けしない ZIP を作成・検査する。
+// Package zipwin creates and inspects ZIP archives whose file names survive
+// extraction with Windows' built-in tools without turning into mojibake.
 //
-// 文字化け対策の中核は次の 3 点:
-//   - ファイル名を UTF-8 で格納する
-//   - General Purpose Bit Flag の bit 11 (EFS) を立てて UTF-8 であることを明示する
-//   - macOS 由来の NFD 名を NFC に正規化する
+// The core of the fix is three things:
+//   - store file names as UTF-8
+//   - set bit 11 (EFS) of the General Purpose Bit Flag to declare the names as UTF-8
+//   - normalize macOS-originated NFD names to NFC
 package zipwin
 
 import (
@@ -20,24 +21,25 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// utf8Flag は ZIP の General Purpose Bit Flag の bit 11 (EFS / Language Encoding Flag)。
-// Go の Writer は非 ASCII の UTF-8 名なら自動で立てるが、ASCII 名でも明示的に立てる運用にする。
+// utf8Flag is bit 11 (EFS / Language Encoding Flag) of the ZIP General Purpose
+// Bit Flag. Go's Writer sets it automatically for non-ASCII UTF-8 names, but
+// we set it explicitly even for ASCII names so every entry declares it.
 const utf8Flag = 1 << 11
 
-// CreateOptions は Create の入力。
+// CreateOptions is the input to Create.
 type CreateOptions struct {
-	// Source は圧縮対象のディレクトリまたは単一ファイル。
+	// Source is the directory or single file to archive.
 	Source string
-	// Dest は出力する ZIP のパス。
+	// Dest is the path of the ZIP to write.
 	Dest string
-	// Stderr はシンボリックリンクをスキップしたときの通知先。nil なら通知しない。
+	// Stderr receives a notice whenever a symbolic link is skipped. If nil, no notice is written.
 	Stderr io.Writer
-	// Force が true なら既存の Dest を上書きする。
+	// Force, if true, overwrites an existing Dest.
 	Force bool
 }
 
-// Create は opts.Source を ZIP にして opts.Dest に書き出す。
-// ディレクトリの場合はそのディレクトリ名が ZIP のルートフォルダになる。
+// Create archives opts.Source into opts.Dest.
+// For a directory, that directory's name becomes the archive's root folder.
 func Create(opts CreateOptions) error {
 	srcAbs, err := filepath.Abs(opts.Source)
 	if err != nil {
@@ -47,17 +49,19 @@ func Create(opts CreateOptions) error {
 	if err != nil {
 		return fmt.Errorf("resolve destination path: %w", err)
 	}
-	// "/" や "." を渡されるとルートフォルダ名が作れない。
+	// Passing "/" or "." would leave no name to use as the root folder.
 	base := filepath.Base(srcAbs)
 	if base == "." || base == string(filepath.Separator) {
 		return fmt.Errorf("source %q has no name to use as the archive root", opts.Source)
 	}
-	// Source 自身が除外ルールに該当すると、走査結果が空、または（__MACOSX 配下のように）
-	// 中身が丸ごと落ちたアーカイブが黙って出来上がる。指定ミスとして扱う。
+	// If Source itself matches an exclusion rule, the walk silently produces an
+	// empty archive, or (as with anything under __MACOSX) one whose contents are
+	// entirely dropped. Treat that as a usage mistake.
 	if isMacMetadata(base) {
 		return fmt.Errorf("source %q is an excluded macOS metadata name", opts.Source)
 	}
-	// Lstat: Source 自体が symlink なら追跡せずエラーにする（symlink 非追跡の方針を root にも適用）。
+	// Lstat is deliberate: if Source itself is a symlink, error out instead of
+	// following it (the symlink-non-following policy applies to the root too).
 	info, err := os.Lstat(srcAbs)
 	if err != nil {
 		return fmt.Errorf("stat source: %w", err)
@@ -65,29 +69,33 @@ func Create(opts CreateOptions) error {
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return fmt.Errorf("source %q is a symbolic link", opts.Source)
 	}
-	// FIFO・ソケット・デバイスファイルは ZIP に入れられず、os.Open が読み手を待って
-	// 無限にブロックすることもある（FIFO）。単一ファイル入力は走査を通らないので、
-	// ディレクトリ内の同種のスキップ処理では守られない。ここで一時ファイルを作る前に弾く。
+	// FIFOs, sockets, and device files can't go into a ZIP, and os.Open on a FIFO
+	// can block forever waiting for a reader. A single-file source never goes
+	// through the walk, so the equivalent skip logic for directory entries
+	// doesn't protect it. Reject it here, before any temp file is created.
 	if !info.IsDir() && !info.Mode().IsRegular() {
 		return fmt.Errorf("source %q is not a regular file", opts.Source)
 	}
-	// 走査するパスを実体のパスに寄せておく（macOS の /tmp と /private/tmp のような別名の解決）。
-	// 末尾コンポーネントが symlink でないことは直前の Lstat で確認済みなので、
-	// ここで解決してもアーカイブのルート名（filepath.Base）は変わらない。
+	// Resolve the path we walk to its real path (e.g. macOS's /tmp vs. /private/tmp
+	// aliasing). The Lstat above already confirmed the final component isn't a
+	// symlink, so resolving here doesn't change the archive's root name
+	// (filepath.Base).
 	srcAbs, err = filepath.EvalSymlinks(srcAbs)
 	if err != nil {
 		return fmt.Errorf("resolve source symlinks: %w", err)
 	}
-	// dstAbs はまだ存在しないことがあるため本体は解決できない。親ディレクトリだけ解決して結合する。
-	// これは出力先ディレクトリが存在することの確認も兼ねる。
+	// dstAbs may not exist yet, so it can't be resolved directly. Resolve only
+	// its parent directory and join back the base name. This doubles as
+	// confirming the destination directory exists.
 	dstDir, err := filepath.EvalSymlinks(filepath.Dir(dstAbs))
 	if err != nil {
 		return fmt.Errorf("resolve destination directory: %w", err)
 	}
 	dstAbs = filepath.Join(dstDir, filepath.Base(dstAbs))
 
-	// 単一ファイル入力で Source と Dest が同じ実体だと、--force 付きの rename が
-	// 元ファイルを ZIP で置き換えてしまう（入力データの喪失）。
+	// For a single-file source, if Source and Dest are the same underlying file,
+	// the rename done under --force would replace the original file with the
+	// ZIP (destroying the input data).
 	if !info.IsDir() {
 		if dstInfo, err := os.Lstat(dstAbs); err == nil && os.SameFile(info, dstInfo) {
 			return errors.New("source and destination are the same file")
@@ -103,16 +111,20 @@ func Create(opts CreateOptions) error {
 		stderr = io.Discard
 	}
 
-	// 同じディレクトリの一時ファイルに書き、完成後に rename する。
-	// 途中で失敗しても壊れた ZIP が Dest に残らず、--force の上書きも完成後に一度で行われる。
-	// O_EXCL: 既に同名があれば失敗させ、他者が置いた symlink 等を開かない。
+	// Write to a temp file in the same directory, then rename it into place once
+	// done. A failure partway through never leaves a broken ZIP at Dest, and a
+	// --force overwrite happens as a single atomic swap once the archive is complete.
+	// O_EXCL: fail if a file of that name already exists, so we never open a
+	// symlink (or similar) someone else placed there.
 	tmpPath := dstAbs + ".tmp"
-	// 中断された過去の実行が一時ファイルを残していると O_EXCL が失敗し続け、
-	// 出力先が恒久的に塞がる。上書きを許可されている --force のときだけ取り除く。
-	// os.Remove は symlink ならリンク自身を消す（リンク先には触れない）。
+	// If a previous, interrupted run left a temp file behind, O_EXCL would keep
+	// failing forever and permanently block the destination. Only remove it when
+	// --force explicitly grants permission to overwrite.
+	// os.Remove on a symlink removes the link itself (never touches its target).
 	if opts.Force {
-		// 消す前に「それは入力そのものではないか」を確かめる。Source に <dest>.tmp を
-		// 指定されると、掃除のつもりの Remove が入力データを消してしまう。
+		// Before removing it, check whether it's actually the input itself.
+		// If Source is given as <dest>.tmp, a "cleanup" Remove here would
+		// destroy the input data.
 		staleInfo, err := os.Lstat(tmpPath)
 		switch {
 		case err == nil && os.SameFile(staleInfo, info):
@@ -120,8 +132,8 @@ func Create(opts CreateOptions) error {
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			return fmt.Errorf("stat temporary file %q: %w", tmpPath, err)
 		case err == nil:
-			// 消したことは黙らない。無関係なファイルが <dest>.tmp という名前で
-			// 置かれていた場合に、消えた理由をたどれるようにする。
+			// Don't remove it silently. If some unrelated file happened to be
+			// sitting at <dest>.tmp, this notice lets its disappearance be traced.
 			fmt.Fprintf(stderr, "zip2win: removing stale temporary file: %s\n", DisplayName(tmpPath))
 		}
 		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -142,8 +154,9 @@ func Create(opts CreateOptions) error {
 		}
 	}()
 
-	// 自己取り込み防止の基準はパス文字列ではなくファイル実体にする。
-	// 一時ファイルの情報は開いた fd から取る（開いた直後に差し替えられても取り違えない）。
+	// Self-inclusion is decided by file identity, not path strings.
+	// The temp file's info comes from the already-open fd (so a swap right
+	// after opening it can't be mistaken for a different file).
 	var excluded []fs.FileInfo
 	tmpInfo, err := out.Stat()
 	if err != nil {
@@ -151,8 +164,9 @@ func Create(opts CreateOptions) error {
 		return fmt.Errorf("stat temporary file: %w", err)
 	}
 	excluded = append(excluded, tmpInfo)
-	// Dest は --force での上書き時にだけ存在する。symlink なら rename で置き換わる側なので
-	// リンク先ではなく symlink 自身の実体を覚える（走査側も symlink を追跡しない）。
+	// Dest only exists when overwriting under --force. If it's a symlink, the
+	// rename replaces the link itself, so remember the symlink's own identity,
+	// not its target's (the walk likewise never follows symlinks).
 	if dstInfo, err := os.Lstat(dstAbs); err == nil {
 		excluded = append(excluded, dstInfo)
 	}
@@ -170,13 +184,15 @@ func Create(opts CreateOptions) error {
 		_ = out.Close()
 		return err
 	}
-	// Close で中央ディレクトリが書かれる。ここを検査しないと壊れた ZIP を成功扱いしてしまう。
+	// Close writes the central directory. Skipping this check would let a
+	// broken ZIP be reported as a success.
 	if err := zw.Close(); err != nil {
 		_ = out.Close()
 		return fmt.Errorf("finalize zip: %w", err)
 	}
-	// rename の前に fsync する。ここを省くと、クラッシュ後に「名前はあるが中身が空」の
-	// ZIP が残りうる（rename はメタデータだけの操作で、データの到達を保証しない）。
+	// fsync before renaming. Without this, a crash could leave behind a ZIP
+	// that exists by name but is empty inside (rename is metadata-only and
+	// doesn't guarantee the data itself has reached disk).
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
 		return fmt.Errorf("sync temporary file: %w", err)
@@ -191,11 +207,13 @@ func Create(opts CreateOptions) error {
 	return nil
 }
 
-// checkDest は出力先の事前チェック。存在しなければ OK、ディレクトリなら常にエラー、
-// 既存ファイルは force のときだけ許可する。
+// checkDest is the upfront check on the destination: OK if it doesn't exist,
+// always an error if it's a directory, and allowed for an existing file only
+// when force is set.
 func checkDest(dstAbs string, force bool) error {
-	// Lstat は意図的。出力先が symlink でも rename はリンク自身を置き換える（リンク先には書かない）ので、
-	// リンク先ではなく symlink そのものの有無・種別を見る。
+	// Lstat is deliberate. Even if the destination is a symlink, rename
+	// replaces the link itself (never writes through it to its target), so we
+	// check for the symlink's own existence and type, not its target's.
 	info, err := os.Lstat(dstAbs)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -212,30 +230,35 @@ func checkDest(dstAbs string, force bool) error {
 	return nil
 }
 
-// creator は 1 回の ZIP 作成の状態を持つ。
+// creator holds the state for a single ZIP-creation run.
 type creator struct {
 	zw *zip.Writer
-	// base は ZIP 内パスの基準ディレクトリ。Source の親なので Source 名がルートになる。
+	// base is the directory that ZIP-internal paths are computed relative to.
+	// It's Source's parent, which is what makes Source's own name the root.
 	base string
-	// excluded は走査中に出会っても取り込まないファイル実体（出力 ZIP 自身と一時ファイル）。
-	// パス文字列ではなく os.SameFile で比較するので、大文字小文字を区別しない
-	// ファイルシステムでの綴り違いやハードリンク経由の別名でも取りこぼさない。
+	// excluded holds the file identities to skip if encountered during the
+	// walk (the output ZIP itself and the temp file). Compared with
+	// os.SameFile rather than as path strings, so a spelling difference on a
+	// case-insensitive file system or a hard-linked alias is still caught.
 	excluded []fs.FileInfo
-	// stderr はスキップ通知の出力先。
+	// stderr is where skip notices are written.
 	stderr io.Writer
-	// seen は正規化後の名前 -> 正規化前の相対パス。NFC 正規化で別ファイルが同名になる衝突を検出する。
-	// ディレクトリも登録する。キーは末尾 "/" を付ける前の名前にしてあり、これは意図的:
-	// 同名のディレクトリとファイルは展開後に共存できないので衝突として弾く。
+	// seen maps a normalized name to the un-normalized relative path that
+	// produced it. It detects collisions where NFC normalization makes two
+	// different files share a name. Directories are registered too, and the
+	// key deliberately omits the trailing "/": a directory and a file with the
+	// same name can't coexist after extraction, so that's treated as a collision.
 	seen map[string]string
 }
 
-// walk は srcAbs (ディレクトリまたはファイル) 配下を順に add する。
-// 除外対象と symlink はここで弾く。
+// walk adds everything under srcAbs (a directory or a file) in turn.
+// Exclusions and symlinks are filtered out here.
 func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 	if !info.IsDir() {
-		// 単一ファイル入力もディレクトリ内エントリと同じ除外判定を通す。
-		// ここで飛ばすと中身のない ZIP が黙って出来上がるので、エラーにする。
-		// Create 側の事前チェックと重なる二重の守り。
+		// Run a single-file source through the same exclusion check as
+		// directory entries. Skipping it silently here would produce an
+		// empty ZIP, so it's an error instead — a second line of defense
+		// alongside Create's own upfront check.
 		if c.isExcluded(info) {
 			return errors.New("source is the output file")
 		}
@@ -251,25 +274,28 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 			}
 			return nil
 		}
-		// d.Info() は symlink を辿らない (Lstat 相当)。
+		// d.Info() doesn't follow symlinks (equivalent to Lstat).
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		// 出力 ZIP が入力ディレクトリ内にあると、書きかけの自分自身を読み込んでしまう。
+		// If the output ZIP sits inside the input directory, this keeps the
+		// walk from reading its own still-being-written self.
 		if c.isExcluded(info) {
 			return nil
 		}
-		// WalkDir は symlink を辿らない。リンク先の意図しないファイル取り込みやループを避けるため
-		// エントリとしても格納せず、黙って欠落しないよう通知だけ出す。
-		// 通知には DisplayName を通す。名前に端末エスケープシーケンスが仕込まれていても
-		// そのまま端末へ流さない。
+		// WalkDir doesn't follow symlinks. To avoid unintentionally pulling in
+		// whatever the link points to, or a loop, we neither store it as an
+		// entry nor drop it silently — just emit a notice.
+		// The notice is passed through DisplayName so an escape sequence
+		// embedded in the name never reaches the terminal raw.
 		if d.Type()&fs.ModeSymlink != 0 {
 			fmt.Fprintf(c.stderr, "zip2win: skipping symbolic link: %s\n", DisplayName(path))
 			return nil
 		}
-		// FIFO・ソケット・デバイスファイルは ZIP に入れられないうえ、os.Open が
-		// 読み手を待って無限にブロックすることがある（FIFO）。symlink と同様に通知して飛ばす。
+		// FIFOs, sockets, and device files can't go into a ZIP, and os.Open on
+		// a FIFO can block forever waiting for a reader. Skip them with a
+		// notice, the same as symlinks.
 		if !info.Mode().IsRegular() && !info.IsDir() {
 			fmt.Fprintf(c.stderr, "zip2win: skipping non-regular file: %s\n", DisplayName(path))
 			return nil
@@ -278,7 +304,7 @@ func (c *creator) walk(srcAbs string, info fs.FileInfo) error {
 	})
 }
 
-// isExcluded は info が取り込み対象外のファイル実体なら true。
+// isExcluded reports whether info is a file identity that should not be archived.
 func (c *creator) isExcluded(info fs.FileInfo) bool {
 	for _, ex := range c.excluded {
 		if os.SameFile(info, ex) {
@@ -288,42 +314,45 @@ func (c *creator) isExcluded(info fs.FileInfo) bool {
 	return false
 }
 
-// isMacMetadata は macOS が生成するメタデータファイル・フォルダ名なら true。
-//   - .DS_Store: Finder の表示設定
-//   - __MACOSX: AppleDouble などを格納するフォルダ
-//   - ._*: AppleDouble のサイドカーファイル
+// isMacMetadata reports whether name is a metadata file or folder name macOS generates:
+//   - .DS_Store: Finder's per-folder display settings
+//   - __MACOSX: the folder holding AppleDouble sidecar data and similar
+//   - ._*: AppleDouble sidecar files
 func isMacMetadata(name string) bool {
 	return name == ".DS_Store" || name == "__MACOSX" || strings.HasPrefix(name, "._")
 }
 
-// entryName は path を base からの相対パス rel と、ZIP 用に区切りを / に統一して
-// NFC 正規化した name に変換する。
+// entryName converts path into rel, its path relative to base, and name, the
+// ZIP-internal form: rel with separators normalized to / and NFC-normalized.
 func (c *creator) entryName(path string) (rel, name string, err error) {
 	rel, err = filepath.Rel(c.base, path)
 	if err != nil {
 		return "", "", err
 	}
-	// Linux ではファイル名が任意のバイト列になりうる。EFS を立てる以上、不正な UTF-8 は拒否する。
+	// On Linux a file name can be an arbitrary byte sequence. Since we set
+	// EFS, invalid UTF-8 is rejected outright.
 	if !utf8.ValidString(rel) {
 		return "", "", fmt.Errorf("file name is not valid UTF-8: %q", rel)
 	}
 	return rel, norm.NFC.String(filepath.ToSlash(rel)), nil
 }
 
-// add は 1 エントリを ZIP に書く。
+// add writes a single entry to the ZIP.
 func (c *creator) add(path string, info fs.FileInfo) error {
 	rel, name, err := c.entryName(path)
 	if err != nil {
 		return err
 	}
-	// 同一パスのエントリが複数ある ZIP は両方を取り出せず、展開ツールごとに挙動が割れる。
+	// A ZIP with more than one entry at the same path can't have both
+	// extracted, and different extractors handle that inconsistently.
 	if prev, dup := c.seen[name]; dup {
 		return fmt.Errorf("entry name collision after NFC normalization: %q and %q both become %q", prev, rel, name)
 	}
 	c.seen[name] = rel
-	// バックスラッシュはディレクトリ区切りとして解釈する展開ツールがあり、
-	// 意図しない階層やパストラバーサルの素材になる（inspect も NG として報告する）。
-	// 名前を書き換えると元に戻せないので、警告だけ出して続行する。
+	// Some extractors treat a backslash as a directory separator, which can
+	// produce an unintended hierarchy or serve as path-traversal material
+	// (inspect also reports this as a problem). Since rewriting the name
+	// can't be undone, we only warn and continue.
 	if strings.Contains(name, `\`) {
 		fmt.Fprintf(c.stderr, "zip2win: warning: name contains backslash, some extractors treat it as a separator: %s\n", DisplayName(name))
 	}
@@ -336,7 +365,8 @@ func (c *creator) add(path string, info fs.FileInfo) error {
 	header.Flags |= utf8Flag
 
 	if info.IsDir() {
-		// 末尾 / がディレクトリエントリの印。Writer はサイズを 0 にして Store で書く。
+		// A trailing / marks a directory entry. The Writer stores it with
+		// size 0 using Store.
 		header.Name += "/"
 		_, err := c.zw.CreateHeader(header)
 		return err

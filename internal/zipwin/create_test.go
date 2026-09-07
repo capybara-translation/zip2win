@@ -17,7 +17,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// mustWrite は path にファイルを作る。親ディレクトリがなければ作る。
+// mustWrite creates a file at path, creating any missing parent directories.
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -28,7 +28,7 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 }
 
-// readZip は ZIP を開き、エントリ名 -> *zip.File のマップを返す。
+// readZip opens the ZIP and returns a map of entry name -> *zip.File.
 func readZip(t *testing.T, path string) map[string]*zip.File {
 	t.Helper()
 	r, err := zip.OpenReader(path)
@@ -43,7 +43,7 @@ func readZip(t *testing.T, path string) map[string]*zip.File {
 	return m
 }
 
-// readEntry はエントリの内容を文字列で返す。
+// readEntry returns the entry's content as a string.
 func readEntry(t *testing.T, f *zip.File) string {
 	t.Helper()
 	rc, err := f.Open()
@@ -108,8 +108,8 @@ func TestCreate_DirectoryIncludesRootFolderName(t *testing.T) {
 func TestCreate_NormalizesNFDToNFC(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")
-	// "か" + 結合濁点 (NFD)。NFC では "が" (U+304C) 1 文字になる。
-	mustWrite(t, filepath.Join(src, norm.NFD.String("が.txt")), "x") // か + 結合濁点 (U+304B U+3099)
+	// U+304B ("ka") + combining dakuten (NFD). In NFC that becomes the single character U+304C ("ga").
+	mustWrite(t, filepath.Join(src, norm.NFD.String("が.txt")), "x") // U+304B + combining dakuten (U+3099)
 	dst := filepath.Join(tmp, "out.zip")
 
 	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
@@ -131,7 +131,8 @@ func TestCreate_NFCCollisionIsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// APFS/HFS+ は正規化差を同名として扱うので 2 つ目の書き込みが 1 つ目を上書きし、衝突が起きない。
+	// APFS/HFS+ treat normalization-only differences as the same name, so the
+	// second write overwrites the first and no collision occurs.
 	if len(names) < 2 {
 		t.Skip("filesystem merges NFC/NFD names; collision cannot occur here")
 	}
@@ -142,8 +143,9 @@ func TestCreate_NFCCollisionIsError(t *testing.T) {
 	}
 }
 
-// TestCreate_NFCCollisionBetweenDirsIsError はディレクトリ同士の衝突も検出することを確認する。
-// seen のキーは末尾 "/" を付ける前の名前なので、ディレクトリとファイルの衝突も拾える。
+// TestCreate_NFCCollisionBetweenDirsIsError confirms that collisions between
+// directories are also detected. seen's key omits the trailing "/", so a
+// collision between a directory and a file is caught too.
 func TestCreate_NFCCollisionBetweenDirsIsError(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")
@@ -156,7 +158,8 @@ func TestCreate_NFCCollisionBetweenDirsIsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// APFS/HFS+ は正規化差を同名として扱うので 2 つ目の MkdirAll が既存を指し、衝突が起きない。
+	// APFS/HFS+ treat normalization-only differences as the same name, so the
+	// second MkdirAll resolves to the existing directory and no collision occurs.
 	if len(names) < 2 {
 		t.Skip("filesystem merges NFC/NFD names; collision cannot occur here")
 	}
@@ -212,8 +215,9 @@ func TestCreate_MissingSource(t *testing.T) {
 	}
 }
 
-// TestCreate_MacMetadataSourceIsError は除外ルールに引っかかる名前を Source に指定したとき、
-// 黙って空（または中身が抜けた）アーカイブを作らずエラーになることを確認する。
+// TestCreate_MacMetadataSourceIsError confirms that specifying a Source whose
+// name matches an exclusion rule fails with an error, instead of silently
+// producing an empty (or partly missing) archive.
 func TestCreate_MacMetadataSourceIsError(t *testing.T) {
 	for _, name := range []string{"__MACOSX", ".DS_Store", "._x"} {
 		t.Run(name, func(t *testing.T) {
@@ -264,7 +268,7 @@ func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
 	if err := os.Symlink(filepath.Join(src, "real.txt"), filepath.Join(src, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	// 名前に端末エスケープシーケンスを仕込んだリンク。通知経由で端末を操作されないことを確認する。
+	// A link whose name embeds a terminal escape sequence. Confirms the notice doesn't let it hijack the terminal.
 	if err := os.Symlink(filepath.Join(src, "real.txt"), filepath.Join(src, "esc\x1b[31m.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +285,7 @@ func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
 	if !strings.Contains(stderr.String(), "skipping symbolic link") || !strings.Contains(stderr.String(), "link.txt") {
 		t.Errorf("stderr = %q, want symlink notice naming link.txt", stderr.String())
 	}
-	// 名前に ESC を含むエントリでも、端末を操作できる生のエスケープシーケンスは出さない。
+	// Even for an entry whose name contains ESC, no raw escape sequence that could control the terminal is emitted.
 	if strings.Contains(stderr.String(), "\x1b") {
 		t.Errorf("stderr contains a raw ESC: %q", stderr.String())
 	}
@@ -290,8 +294,9 @@ func TestCreate_SkipsSymlinkWithNotice(t *testing.T) {
 	}
 }
 
-// TestCreate_WarnsOnBackslashInName はファイル名のバックスラッシュを警告することを確認する。
-// 一部の展開ツールはこれをディレクトリ区切りとして扱う（zip2win inspect も NG と報告する）。
+// TestCreate_WarnsOnBackslashInName confirms that a backslash in a file name
+// is warned about. Some extractors treat it as a directory separator
+// (zip2win inspect also reports it as a problem).
 func TestCreate_WarnsOnBackslashInName(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip(`\ cannot appear in a Windows file name`)
@@ -319,7 +324,7 @@ func TestCreate_DoesNotIncludeItself(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")
 	mustWrite(t, filepath.Join(src, "a.txt"), "a")
-	dst := filepath.Join(src, "out.zip") // 出力先が入力ディレクトリの中
+	dst := filepath.Join(src, "out.zip") // destination is inside the input directory
 
 	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -371,10 +376,11 @@ func TestCreate_SkipsSymlinkToDirectory(t *testing.T) {
 	}
 }
 
-// TestCreate_DoesNotIncludeItselfViaPathAlias は Source と Dest が同じ実体を
-// 別名（macOS の /tmp と /private/tmp など）で参照する場合でも、書きかけの ZIP を
-// 自分自身に取り込まないことを確認する。alias 自体は symlink だが、
-// alias/docs という末尾コンポーネントは symlink ではないため受理される必要がある。
+// TestCreate_DoesNotIncludeItselfViaPathAlias confirms that even when Source
+// and Dest refer to the same underlying file through different aliases (such
+// as macOS's /tmp vs. /private/tmp), the in-progress ZIP is never pulled into
+// itself. The alias itself is a symlink, but the final component
+// alias/docs is not a symlink, so it must still be accepted.
 func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs privileges on Windows")
@@ -387,8 +393,8 @@ func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	src := filepath.Join(alias, "docs")           // alias 経由（alias 自体が symlink）
-	dst := filepath.Join(real, "docs", "out.zip") // 実パス側に出力
+	src := filepath.Join(alias, "docs")           // through the alias (alias itself is a symlink)
+	dst := filepath.Join(real, "docs", "out.zip") // written to the real path side
 
 	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -400,10 +406,12 @@ func TestCreate_DoesNotIncludeItselfViaPathAlias(t *testing.T) {
 	}
 }
 
-// TestCreate_ResolvesSourcePathAliases は Source が symlink 経由の別名パスで与えられても、
-// 走査を実体のパスで行うことを確認する（Create の EvalSymlinks(srcAbs) を固定するテスト）。
-// 解決しないと通知やエラーが実体と対応しない見かけのパスを指し、
-// どのファイルの話なのかを追えなくなる。ルート名は指定どおりのままでなければならない。
+// TestCreate_ResolvesSourcePathAliases confirms that even when Source is
+// given as an alias path through a symlink, the walk operates on the real
+// path (this pins down Create's EvalSymlinks(srcAbs) call). Without that
+// resolution, notices and errors would point at an apparent path that
+// doesn't match the real file, making it impossible to tell which file is
+// being referred to. The root name must still be exactly what was given.
 func TestCreate_ResolvesSourcePathAliases(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs privileges on Windows")
@@ -411,7 +419,7 @@ func TestCreate_ResolvesSourcePathAliases(t *testing.T) {
 	tmp := t.TempDir()
 	realDir := filepath.Join(tmp, "real")
 	mustWrite(t, filepath.Join(realDir, "docs", "a.txt"), "a")
-	// 通知を出させるための symlink。通知に載るパスで解決の有無を観測する。
+	// A symlink whose sole purpose is to trigger a notice. The path in that notice tells us whether resolution happened.
 	if err := os.Symlink(filepath.Join(realDir, "docs", "a.txt"), filepath.Join(realDir, "docs", "link.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +427,7 @@ func TestCreate_ResolvesSourcePathAliases(t *testing.T) {
 	if err := os.Symlink(realDir, alias); err != nil {
 		t.Fatal(err)
 	}
-	// tmp 自体が symlink 経由のことがある (macOS の /var -> /private/var) ので期待値も解決しておく。
+	// tmp itself can be reached through a symlink (macOS's /var -> /private/var), so resolve the expected value too.
 	resolved, err := filepath.EvalSymlinks(realDir)
 	if err != nil {
 		t.Fatal(err)
@@ -443,18 +451,20 @@ func TestCreate_ResolvesSourcePathAliases(t *testing.T) {
 	}
 }
 
-// TestCreate_DoesNotIncludeItselfCaseInsensitive は大文字小文字を区別しないファイルシステム
-// (APFS / NTFS の既定) で、Source と Dest の綴りだけが違う場合でも自己取り込みを防げることを確認する。
-// パス文字列の比較では防げず、ファイル実体の同一性 (os.SameFile) で判定する必要がある。
+// TestCreate_DoesNotIncludeItselfCaseInsensitive confirms that self-inclusion
+// is still prevented on a case-insensitive file system (the default for
+// APFS / NTFS) even when Source and Dest differ only in spelling.
+// Comparing path strings can't catch this — it needs file-identity
+// comparison (os.SameFile).
 func TestCreate_DoesNotIncludeItselfCaseInsensitive(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "SRC")
 	mustWrite(t, filepath.Join(src, "a.txt"), "a")
-	// 実際に大文字小文字を無視するファイルシステムかを確認してから進む。
+	// Confirm this file system actually ignores case before proceeding.
 	if _, err := os.Stat(filepath.Join(tmp, "src")); err != nil {
 		t.Skip("filesystem is case-sensitive; the alias cannot occur here")
 	}
-	dst := filepath.Join(tmp, "src", "out.zip") // 同じディレクトリを別の綴りで指す
+	dst := filepath.Join(tmp, "src", "out.zip") // points at the same directory with a different spelling
 
 	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -466,8 +476,9 @@ func TestCreate_DoesNotIncludeItselfCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestCreate_SingleFileSourceIsDestIsError は単一ファイル入力で Source と Dest が
-// 同じ実体のとき、rename で元ファイルを ZIP に置き換えて壊さないことを確認する。
+// TestCreate_SingleFileSourceIsDestIsError confirms that for a single-file
+// source, when Source and Dest are the same underlying file, the rename
+// never replaces (and destroys) the original file with the ZIP.
 func TestCreate_SingleFileSourceIsDestIsError(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "メモ.txt")
@@ -482,8 +493,9 @@ func TestCreate_SingleFileSourceIsDestIsError(t *testing.T) {
 	}
 }
 
-// TestCreate_SourceIsTempFileIsError は Source が出力先の一時ファイル名 (<dest>.tmp) と
-// 同じ実体のとき、--force の取り残し掃除が入力ファイルを消してしまわないことを確認する。
+// TestCreate_SourceIsTempFileIsError confirms that when Source is the same
+// underlying file as the destination's temp-file name (<dest>.tmp), the
+// --force cleanup of stale temp files never deletes the input file.
 func TestCreate_SourceIsTempFileIsError(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "out.zip")
@@ -561,14 +573,14 @@ func TestCreate_StaleTempFileIsError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "temporary file") {
 		t.Fatalf("err = %v, want temporary file error", err)
 	}
-	// 中断された過去の実行が残した一時ファイルで詰まったとき、抜け道を案内する。
+	// When blocked by a temp file left behind by a previous, interrupted run, point at the way out.
 	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("err = %v, want the message to mention --force", err)
 	}
 }
 
-// TestCreate_StaleTempFileRemovedWithForce は取り残された <dest>.tmp が出力先を
-// 恒久的に塞がないこと（--force で回復できること）を確認する。
+// TestCreate_StaleTempFileRemovedWithForce confirms that a leftover
+// <dest>.tmp doesn't permanently block the destination — --force recovers from it.
 func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
 	tmp := t.TempDir()
 	src := newSourceDir(t, tmp)
@@ -585,18 +597,19 @@ func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
 	if _, err := os.Lstat(dst + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("temporary file still exists (err=%v)", err)
 	}
-	// 他人のファイルを消したように見える事故を避けるため、消したことは黙らない。
+	// To avoid an accident that looks like deleting someone else's file, the removal is never silent.
 	if !strings.Contains(stderr.String(), "removing stale temporary file") || !strings.Contains(stderr.String(), "out.zip.tmp") {
 		t.Errorf("stderr = %q, want a notice naming the removed temporary file", stderr.String())
 	}
 }
 
-// TestCreate_DoesNotIncludeExistingDestWithForce は --force で既存の出力先を上書きするとき、
-// 走査中に出会う「上書き前の Dest」を取り込まないことを確認する。
+// TestCreate_DoesNotIncludeExistingDestWithForce confirms that when
+// overwriting an existing destination under --force, the walk never includes
+// the pre-overwrite Dest it encounters along the way.
 func TestCreate_DoesNotIncludeExistingDestWithForce(t *testing.T) {
 	tmp := t.TempDir()
 	src := newSourceDir(t, tmp)
-	dst := filepath.Join(src, "out.zip") // 出力先が入力ディレクトリの中
+	dst := filepath.Join(src, "out.zip") // destination is inside the input directory
 	mustWrite(t, dst, "old")
 
 	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
