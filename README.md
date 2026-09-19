@@ -38,7 +38,7 @@ Flags must come before positional arguments.
 | Name collision after NFC normalization | Error (never produces a ZIP with more than one entry at the same path) |
 | Names containing a backslash | A warning is printed and the run continues; `inspect` reports it as a problem |
 | Destination already exists | Error, unless `--force` is given to overwrite it (a directory destination is always an error, even with `--force`) |
-| Writing | Written to a temp file `<output>.tmp` (e.g. `docs.zip` -> `docs.zip.tmp`) and renamed into place once complete, so a failure partway through never leaves a broken ZIP behind. A leftover `.tmp` file is an error; with `--force` it's removed with a notice (an error if it's the same file as `<source>`) |
+| Writing | Written to a temp file next to the output, named `<output>.<random>.tmp`, and renamed into place once complete, so a failure partway through never leaves a broken ZIP behind. The random name can't collide with your own files, and a leftover from an interrupted run (e.g. Ctrl-C) never blocks a later run — it is never deleted automatically either, so remove it by hand. The file is created with mode 0666 minus your umask, like any other file you create |
 | Output ZIP inside the input directory | Never includes itself |
 
 Windows reserved names (like `CON`) and characters that are invalid on

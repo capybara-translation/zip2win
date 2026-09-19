@@ -493,24 +493,42 @@ func TestCreate_SingleFileSourceIsDestIsError(t *testing.T) {
 	}
 }
 
-// TestCreate_SourceIsTempFileIsError confirms that when Source is the same
-// underlying file as the destination's temp-file name (<dest>.tmp), the
-// --force cleanup of stale temp files never deletes the input file.
-func TestCreate_SourceIsTempFileIsError(t *testing.T) {
+// TestCreate_SourceNamedLikeTempFileIsArchived confirms that a source that
+// happens to be named <dest>.tmp is just another input file. Temp files carry
+// a random name component, so no user-chosen name is ever treated as "ours"
+// and cleaned up.
+func TestCreate_SourceNamedLikeTempFileIsArchived(t *testing.T) {
 	tmp := t.TempDir()
 	dst := filepath.Join(tmp, "out.zip")
 	src := dst + ".tmp"
 	mustWrite(t, src, "precious")
 
-	err := Create(CreateOptions{Source: src, Dest: dst, Force: true})
-	if err == nil || !strings.Contains(err.Error(), "same file") {
-		t.Fatalf("err = %v, want 'same file' error", err)
+	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if b, readErr := os.ReadFile(src); readErr != nil || string(b) != "precious" {
-		t.Errorf("source file was removed or modified: %q (err=%v)", b, readErr)
+	if b, err := os.ReadFile(src); err != nil || string(b) != "precious" {
+		t.Errorf("source file was removed or modified: %q (err=%v)", b, err)
 	}
-	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("destination should not exist (err=%v)", err)
+	entries := readZip(t, dst)
+	f, ok := entries["out.zip.tmp"]
+	if !ok {
+		t.Fatalf("entries = %v, want [out.zip.tmp]", entryNames(entries))
+	}
+	if got := readEntry(t, f); got != "precious" {
+		t.Errorf("content = %q, want precious", got)
+	}
+}
+
+// assertNoTempFiles fails if any temp file for dst (<dst>.<random>.tmp, or the
+// old fixed <dst>.tmp) exists.
+func assertNoTempFiles(t *testing.T, dst string) {
+	t.Helper()
+	matches, err := filepath.Glob(dst + "*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("temporary files left behind: %v", matches)
 	}
 }
 
@@ -563,44 +581,42 @@ func TestCreate_DestIsDirectoryIsError(t *testing.T) {
 	}
 }
 
-func TestCreate_StaleTempFileIsError(t *testing.T) {
+// TestCreate_LeftoverTempFileDoesNotBlock confirms that temp files left behind
+// by an interrupted run never block a later run (no --force needed) and are
+// never touched: with random names we can't tell ours from the user's.
+func TestCreate_LeftoverTempFileDoesNotBlock(t *testing.T) {
 	tmp := t.TempDir()
 	src := newSourceDir(t, tmp)
 	dst := filepath.Join(tmp, "out.zip")
-	mustWrite(t, dst+".tmp", "stale")
-
-	err := Create(CreateOptions{Source: src, Dest: dst})
-	if err == nil || !strings.Contains(err.Error(), "temporary file") {
-		t.Fatalf("err = %v, want temporary file error", err)
+	leftovers := []string{dst + ".tmp", dst + ".AAAAAAAAAAAAAAAAAAAAAAAAAA.tmp"}
+	for _, p := range leftovers {
+		mustWrite(t, p, "stale")
 	}
-	// When blocked by a temp file left behind by a previous, interrupted run, point at the way out.
-	if !strings.Contains(err.Error(), "--force") {
-		t.Errorf("err = %v, want the message to mention --force", err)
-	}
-}
 
-// TestCreate_StaleTempFileRemovedWithForce confirms that a leftover
-// <dest>.tmp doesn't permanently block the destination — --force recovers from it.
-func TestCreate_StaleTempFileRemovedWithForce(t *testing.T) {
-	tmp := t.TempDir()
-	src := newSourceDir(t, tmp)
-	dst := filepath.Join(tmp, "out.zip")
-	mustWrite(t, dst+".tmp", "stale")
-	var stderr bytes.Buffer
-
-	if err := Create(CreateOptions{Source: src, Dest: dst, Force: true, Stderr: &stderr}); err != nil {
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if got := entryNames(readZip(t, dst)); !slices.Equal(got, []string{"docs/", "docs/a.txt"}) {
 		t.Errorf("entries = %v, want [docs/ docs/a.txt]", got)
 	}
-	if _, err := os.Lstat(dst + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("temporary file still exists (err=%v)", err)
+	for _, p := range leftovers {
+		if b, err := os.ReadFile(p); err != nil || string(b) != "stale" {
+			t.Errorf("%s was removed or modified: %q (err=%v)", p, b, err)
+		}
 	}
-	// To avoid an accident that looks like deleting someone else's file, the removal is never silent.
-	if !strings.Contains(stderr.String(), "removing stale temporary file") || !strings.Contains(stderr.String(), "out.zip.tmp") {
-		t.Errorf("stderr = %q, want a notice naming the removed temporary file", stderr.String())
+}
+
+// TestCreate_SuccessLeavesNoTempFiles confirms the temp file is renamed into
+// place, not copied: nothing matching <dest>.*.tmp remains after success.
+func TestCreate_SuccessLeavesNoTempFiles(t *testing.T) {
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
+	assertNoTempFiles(t, dst)
 }
 
 // TestCreate_DoesNotIncludeExistingDestWithForce confirms that when
@@ -641,9 +657,8 @@ func TestCreate_FailureLeavesNoFiles(t *testing.T) {
 	if err := Create(CreateOptions{Source: src, Dest: dst}); err == nil {
 		t.Fatal("expected error from unreadable file")
 	}
-	for _, p := range []string{dst, dst + ".tmp"} {
-		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s should not exist after failure (err=%v)", p, err)
-		}
+	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%s should not exist after failure (err=%v)", dst, err)
 	}
+	assertNoTempFiles(t, dst)
 }

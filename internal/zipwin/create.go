@@ -9,6 +9,7 @@ package zipwin
 
 import (
 	"archive/zip"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -114,38 +115,9 @@ func Create(opts CreateOptions) error {
 	// Write to a temp file in the same directory, then rename it into place once
 	// done. A failure partway through never leaves a broken ZIP at Dest, and a
 	// --force overwrite happens as a single atomic swap once the archive is complete.
-	// O_EXCL: fail if a file of that name already exists, so we never open a
-	// symlink (or similar) someone else placed there.
-	tmpPath := dstAbs + ".tmp"
-	// If a previous, interrupted run left a temp file behind, O_EXCL would keep
-	// failing forever and permanently block the destination. Only remove it when
-	// --force explicitly grants permission to overwrite.
-	// os.Remove on a symlink removes the link itself (never touches its target).
-	if opts.Force {
-		// Before removing it, check whether it's actually the input itself.
-		// If Source is given as <dest>.tmp, a "cleanup" Remove here would
-		// destroy the input data.
-		staleInfo, err := os.Lstat(tmpPath)
-		switch {
-		case err == nil && os.SameFile(staleInfo, info):
-			return errors.New("source and temporary file are the same file")
-		case err != nil && !errors.Is(err, fs.ErrNotExist):
-			return fmt.Errorf("stat temporary file %q: %w", tmpPath, err)
-		case err == nil:
-			// Don't remove it silently. If some unrelated file happened to be
-			// sitting at <dest>.tmp, this notice lets its disappearance be traced.
-			fmt.Fprintf(stderr, "zip2win: removing stale temporary file: %s\n", DisplayName(tmpPath))
-		}
-		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove stale temporary file %q: %w", tmpPath, err)
-		}
-	}
-	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	out, tmpPath, err := createTemp(dstAbs)
 	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("temporary file %q already exists (remove it or use --force)", tmpPath)
-		}
-		return fmt.Errorf("create temporary file: %w", err)
+		return err
 	}
 	committed := false
 	defer func() {
@@ -205,6 +177,30 @@ func Create(opts CreateOptions) error {
 	}
 	committed = true
 	return nil
+}
+
+// createTemp creates the temp file the archive is written to, next to dstAbs
+// so the final rename stays on one file system, and returns it with its path.
+//
+// The name carries a random component (<dest>.<random>.tmp). A fixed name can
+// collide with a file the user owns, and a leftover from an interrupted run
+// would block every later run until someone deletes it; a random name has
+// neither problem, so there is never anything of "ours" to clean up.
+//
+// os.CreateTemp does the same thing but hard-codes mode 0600, which would make
+// every archive unreadable to other users. Opening with 0o666 lets the umask
+// decide, as for any other file the user creates.
+//
+// O_EXCL stays even though the name is random: randomness makes a collision
+// unlikely, O_EXCL makes one harmless. It also refuses to open a symlink (or
+// anything else) that someone else placed at that path.
+func createTemp(dstAbs string) (*os.File, string, error) {
+	tmpPath := dstAbs + "." + rand.Text() + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return nil, "", fmt.Errorf("create temporary file: %w", err)
+	}
+	return f, tmpPath, nil
 }
 
 // checkDest is the upfront check on the destination: OK if it doesn't exist,

@@ -32,10 +32,32 @@ func TestCreate_NonRegularSourceIsError(t *testing.T) {
 		t.Fatalf("err = %v, want 'not a regular file' error", err)
 	}
 	// This must be rejected before a temp file is created (not left to cleanup afterward).
-	for _, p := range []string{dst, dst + ".tmp"} {
-		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s should not exist (err=%v)", p, err)
-		}
+	if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%s should not exist (err=%v)", dst, err)
+	}
+	assertNoTempFiles(t, dst)
+}
+
+// TestCreate_OutputModeFollowsUmask pins the reason we open the temp file
+// ourselves instead of using os.CreateTemp: CreateTemp hard-codes mode 0600,
+// which would make every archive unreadable to other users regardless of the
+// umask. Opened with 0o666, the result is whatever the umask allows.
+func TestCreate_OutputModeFollowsUmask(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+
+	tmp := t.TempDir()
+	src := newSourceDir(t, tmp)
+	dst := filepath.Join(tmp, "out.zip")
+	if err := Create(CreateOptions{Source: src, Dest: dst}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Errorf("mode = %o, want 644 (0666 &^ umask 022)", got)
 	}
 }
 
