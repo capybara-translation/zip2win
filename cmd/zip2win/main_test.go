@@ -216,3 +216,52 @@ func TestRun_InspectWrongArgCount(t *testing.T) {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 }
+
+// TestRun_SubcommandHelp confirms that -h/--help on a subcommand behaves like
+// the top-level "help": usage on stdout, exit 0. Before inspect had a FlagSet,
+// "inspect --help" was taken as a file name and failed with exit 1.
+func TestRun_SubcommandHelp(t *testing.T) {
+	for _, args := range [][]string{
+		{"inspect", "--help"},
+		{"inspect", "-h"},
+		{"create", "--help"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 0 {
+			t.Errorf("%v: exit code = %d, want 0; stderr = %q", args, code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Usage:") {
+			t.Errorf("%v: stdout = %q, want usage text", args, stdout.String())
+		}
+	}
+}
+
+func TestRun_InspectUnknownFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"inspect", "-x", "a.zip"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "zip2win: flag provided but not defined: -x") {
+		t.Errorf("stderr = %q, want the flag error prefixed with zip2win:", stderr.String())
+	}
+}
+
+func TestRun_InspectTooManyArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"inspect", "a.zip", "b.zip"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+}
+
+// TestRun_FlagErrorIsEscaped confirms that the flag package's own error
+// message, which echoes the unknown flag name verbatim, goes through the same
+// escaping as every other error.
+func TestRun_FlagErrorIsEscaped(t *testing.T) {
+	for _, cmd := range []string{"create", "inspect"} {
+		var stdout, stderr bytes.Buffer
+		run([]string{cmd, "-bad\x1b[31mflag", "a", "b"}, &stdout, &stderr)
+		if strings.Contains(stderr.String(), "\x1b") {
+			t.Errorf("%s: stderr contains a raw ESC: %q", cmd, stderr.String())
+		}
+	}
+}

@@ -3,11 +3,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/capybara-translation/zip2win/internal/zipwin"
 	"io"
 	"os"
+
+	"github.com/capybara-translation/zip2win/internal/zipwin"
 )
 
 const usageText = `Usage:
@@ -49,16 +51,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 // runCreate runs the create subcommand.
 func runCreate(args []string, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("create", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	flags.Usage = func() { fmt.Fprint(stderr, usageText) }
+	flags := newFlagSet("create")
 	force := flags.Bool("force", false, "overwrite the output file if it exists")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if flags.NArg() != 2 {
-		fmt.Fprint(stderr, usageText)
-		return 2
+	if code, done := parseArgs(flags, args, 2, stdout, stderr); done {
+		return code
 	}
 	err := zipwin.Create(zipwin.CreateOptions{
 		Source: flags.Arg(0),
@@ -75,11 +71,11 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 
 // runInspect runs the inspect subcommand. Inspection failures also exit 1.
 func runInspect(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprint(stderr, usageText)
-		return 2
+	flags := newFlagSet("inspect")
+	if code, done := parseArgs(flags, args, 1, stdout, stderr); done {
+		return code
 	}
-	report, err := zipwin.Inspect(args[0])
+	report, err := zipwin.Inspect(flags.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
 		return 1
@@ -93,4 +89,33 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// newFlagSet returns the FlagSet for a subcommand. The flag package's own
+// output is discarded: it echoes an unknown flag name verbatim, so parseArgs
+// prints the error itself, escaped like every other error.
+func newFlagSet(name string) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	return flags
+}
+
+// parseArgs parses args into flags and checks that exactly nArgs positional
+// arguments remain. When done is true, the caller returns code as is.
+// -h/--help behaves like the top-level "help": usage on stdout, exit 0.
+func parseArgs(flags *flag.FlagSet, args []string, nArgs int, stdout, stderr io.Writer) (code int, done bool) {
+	err := flags.Parse(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		fmt.Fprint(stdout, usageText)
+		return 0, true
+	case err != nil:
+		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
+		fmt.Fprint(stderr, usageText)
+		return 2, true
+	case flags.NArg() != nArgs:
+		fmt.Fprint(stderr, usageText)
+		return 2, true
+	}
+	return 0, false
 }
