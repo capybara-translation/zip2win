@@ -1,8 +1,20 @@
 # zip2win
 
-A CLI that creates ZIP archives whose Japanese file names don't turn into
-mojibake when extracted with Windows' built-in tools (Explorer).
+A CLI that creates ZIP archives that extract cleanly with Windows' built-in
+tools (Explorer), and checks existing ZIPs for the problems that break them.
 Runs on macOS, Linux, and Windows.
+
+- **File names survive extraction.** Non-ASCII names (Japanese, accented
+  letters, and so on) are stored as UTF-8 with the flag that tells Windows so,
+  and macOS's decomposed (NFD) names are normalized to NFC. No mojibake, and
+  no accents or dakuten split off from their letters.
+- **No macOS clutter.** `.DS_Store`, `__MACOSX/`, and `._*` files are left out.
+- **Safe to run.** Symbolic links aren't followed, an existing file is never
+  overwritten without `--force`, and a failed run never leaves a half-written
+  ZIP in place of the output.
+- **`inspect` checks any ZIP**, including ones made by other tools: a missing
+  UTF-8 flag, names usable for path traversal, duplicate entries, macOS
+  metadata, and names disguised with bidirectional control characters.
 
 ## Install
 

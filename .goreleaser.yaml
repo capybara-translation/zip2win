@@ -32,7 +32,7 @@ homebrew_casks:
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://github.com/capybara-translation/zip2win"
-    description: "Create ZIP archives whose Japanese file names survive Windows Explorer"
+    description: "Create ZIP archives that extract cleanly on Windows and check existing ones"
     license: "MIT"
     binaries: [zip2win]
     hooks:
