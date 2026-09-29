@@ -36,3 +36,6 @@ go.work.sum
 
 tmp/
 
+
+# GoReleaser output
+dist/

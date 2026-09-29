@@ -6,9 +6,23 @@ Runs on macOS, Linux, and Windows.
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install --cask capybara-translation/tap/zip2win
+```
+
+### go install
+
 ```bash
 go install github.com/capybara-translation/zip2win/cmd/zip2win@latest
 ```
+
+### Pre-built binaries
+
+Download the archive for your platform from the
+[Releases](https://github.com/capybara-translation/zip2win/releases) page.
+Verify it against `checksums.txt` from the same release.
 
 ## Usage
 
@@ -21,6 +35,9 @@ zip2win create --force docs docs.zip
 
 # Inspect a ZIP (exit 0 if every entry is OK, exit 1 if there's a problem)
 zip2win inspect docs.zip
+
+# Print the version ("dev" for a build from an untagged or modified tree)
+zip2win version
 ```
 
 Flags must come before positional arguments.

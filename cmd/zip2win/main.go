@@ -15,6 +15,7 @@ import (
 const usageText = `Usage:
   zip2win create [--force] <source> <output.zip>
   zip2win inspect <file.zip>
+  zip2win version
 
 Flags must come before positional arguments.
 `
@@ -42,6 +43,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCreate(args[1:], stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
+	case "version", "--version":
+		fmt.Fprintf(stdout, "zip2win %s\n", currentVersion())
+		return 0
 	default:
 		fmt.Fprintf(stderr, "zip2win: unknown command %q\n", args[0])
 		fmt.Fprint(stderr, usageText)

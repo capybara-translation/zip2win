@@ -1,0 +1,48 @@
+version: 2
+
+project_name: zip2win
+
+builds:
+  - main: ./cmd/zip2win
+    binary: zip2win
+    ldflags:
+      # .Version has no leading "v". Add it so `zip2win version` prints the tag
+      # itself, the same string `go install ...@vX.Y.Z` would report.
+      - -s -w -X main.version=v{{ .Version }}
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+# homebrew_casks replaces the deprecated brews section for pre-built binaries.
+homebrew_casks:
+  - repository:
+      owner: capybara-translation
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/capybara-translation/zip2win"
+    description: "Create ZIP archives whose Japanese file names survive Windows Explorer"
+    license: "MIT"
+    binaries: [zip2win]
+    hooks:
+      post:
+        # The binary isn't signed or notarized. Homebrew quarantines cask
+        # downloads, so without this Gatekeeper refuses to run it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/zip2win"]
+          end
+
+changelog:
+  sort: asc

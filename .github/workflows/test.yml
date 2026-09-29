@@ -26,3 +26,18 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  goreleaser-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Builds every release target without publishing, so a broken
+      # .goreleaser.yaml shows up before a tag is pushed.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
