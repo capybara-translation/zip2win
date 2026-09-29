@@ -1,0 +1,4 @@
+# Check out every text file with LF endings, on every platform. gofmt treats
+# CRLF as unformatted, so a Windows checkout with core.autocrlf=true would
+# otherwise fail the gofmt step in CI.
+* text=auto eol=lf
