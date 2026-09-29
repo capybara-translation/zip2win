@@ -6,6 +6,10 @@ on: [push, pull_request]
 permissions:
   contents: read
 
+# Go is always the latest stable release, not the go.mod minimum: the standard
+# library is compiled into the binary, so building with an old patch release
+# would ship its known vulnerabilities. go.mod still sets the minimum for
+# `go install`.
 jobs:
   test:
     strategy:
@@ -16,7 +20,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
       - name: gofmt
         shell: bash
         run: |
@@ -26,6 +31,18 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+      # Fails on known vulnerabilities reachable from our code, in dependencies
+      # and in the standard library of the Go version above.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   goreleaser-snapshot:
     runs-on: ubuntu-latest
     steps:
@@ -34,7 +51,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
       # Builds every release target without publishing, so a broken
       # .goreleaser.yaml shows up before a tag is pushed.
       - uses: goreleaser/goreleaser-action@v7
