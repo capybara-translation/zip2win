@@ -33,7 +33,9 @@ type CreateOptions struct {
 	Source string
 	// Dest is the path of the ZIP to write.
 	Dest string
-	// Stderr receives a notice whenever a symbolic link is skipped. If nil, no notice is written.
+	// Stderr receives notices about skipped entries (symbolic links and
+	// non-regular files) and warnings about names that inspect would report
+	// (backslashes, bidirectional control characters). If nil, nothing is written.
 	Stderr io.Writer
 	// Force, if true, overwrites an existing Dest.
 	Force bool
@@ -351,6 +353,11 @@ func (c *creator) add(path string, info fs.FileInfo) error {
 	// can't be undone, we only warn and continue.
 	if strings.Contains(name, `\`) {
 		fmt.Fprintf(c.stderr, "zip2win: warning: name contains backslash, some extractors treat it as a separator: %s\n", DisplayName(name))
+	}
+	// Unlike a backslash this doesn't change how the entry extracts, but the
+	// name can display as something else entirely (inspect reports it too).
+	if hasBidiControl(name) {
+		fmt.Fprintf(c.stderr, "zip2win: warning: name contains a bidirectional control character, which can disguise it when displayed: %s\n", DisplayName(name))
 	}
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {

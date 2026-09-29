@@ -54,6 +54,7 @@ Flags must come before positional arguments.
 | `<source>` itself is an excluded name | Error (`.DS_Store`, `._*`, `__MACOSX`; this avoids silently producing an empty or partly-missing archive) |
 | Name collision after NFC normalization | Error (never produces a ZIP with more than one entry at the same path) |
 | Names containing a backslash | A warning is printed and the run continues; `inspect` reports it as a problem |
+| Names containing a Unicode bidirectional control character (e.g. U+202E) | A warning is printed and the run continues; `inspect` reports it as a problem (such a name can display as something else, e.g. `invoice_\u202efdp.exe` as `invoice_exe.pdf`) |
 | Destination already exists | Error, unless `--force` is given to overwrite it (a directory destination is always an error, even with `--force`) |
 | Writing | Written to a temp file next to the output, named `<output>.<random>.tmp`, and renamed into place once complete, so a failure partway through never leaves a broken ZIP behind. The random name can't collide with your own files, and a leftover from an interrupted run (e.g. Ctrl-C) never blocks a later run — it is never deleted automatically either, so remove it by hand. The file is created with mode 0666 minus your umask, like any other file you create |
 | Output ZIP inside the input directory | Never includes itself |
@@ -67,10 +68,11 @@ extraction target isn't necessarily Windows.
 - The EFS flag not set, or a name that isn't valid UTF-8
 - A name that isn't NFC-normalized (still in NFD)
 - A path containing `..`, an absolute path, or a backslash-separated path (material for path traversal on the extracting side)
+- A Unicode bidirectional control character in a name (it can make the name display as something else)
 - macOS metadata files mixed into the archive
 - Duplicate entry names (including pairs that only become identical after NFC normalization)
 
-When displayed, control characters in entry names are escaped (to prevent terminal escape-sequence injection).
+When displayed, control characters and bidirectional control characters in entry names are escaped (to prevent terminal escape-sequence injection and names that pass for something else).
 
 ## Verifying on a real Windows machine
 

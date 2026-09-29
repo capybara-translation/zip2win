@@ -320,6 +320,32 @@ func TestCreate_WarnsOnBackslashInName(t *testing.T) {
 	}
 }
 
+// TestCreate_WarnsOnBidiControlInName confirms that a file name containing a
+// bidirectional control character is archived with a warning, the same as a
+// backslash: zip2win inspect reports such a name as a problem.
+func TestCreate_WarnsOnBidiControlInName(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	mustWrite(t, filepath.Join(src, "invoice_\u202Efdp.exe"), "x")
+	dst := filepath.Join(tmp, "out.zip")
+	var stderr bytes.Buffer
+
+	if err := Create(CreateOptions{Source: src, Dest: dst, Stderr: &stderr}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	want := []string{"docs/", "docs/invoice_\u202Efdp.exe"}
+	if got := entryNames(readZip(t, dst)); !slices.Equal(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
+	}
+	if !strings.Contains(stderr.String(), "bidirectional control character") || !strings.Contains(stderr.String(), `invoice_\u202efdp.exe`) {
+		t.Errorf("stderr = %q, want a warning naming the escaped entry", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "\u202E") {
+		t.Errorf("stderr contains the raw control character: %q", stderr.String())
+	}
+}
+
 func TestCreate_DoesNotIncludeItself(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")

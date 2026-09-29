@@ -272,10 +272,39 @@ func TestDisplayName(t *testing.T) {
 		{"日本語.txt", "日本語.txt"},
 		{"a\x1bb", "a\\u001bb"},
 		{"bad\xffbyte", `bad\xffbyte`},
+		// Bidi controls are invisible but reorder the text around them in a
+		// bidi-aware viewer, so they're escaped like other control characters.
+		{"invoice_\u202Efdp.exe", `invoice_\u202efdp.exe`},
+		{"a\u2066b\u2069", `a\u2066b\u2069`},
+		{"a\u200Fb", `a\u200fb`},
 	}
 	for _, c := range cases {
 		if got := DisplayName(c.in); got != c.want {
 			t.Errorf("DisplayName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestInspect_FlagsBidiControlCharacters confirms that a name containing a
+// Unicode bidirectional control character is reported. "invoice_" + U+202E +
+// "fdp.exe" displays as "invoice_exe.pdf" wherever the bidi algorithm is
+// applied, disguising an executable as a document.
+func TestInspect_FlagsBidiControlCharacters(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bidi.zip")
+	writeRawZip(t, path, []*zip.FileHeader{
+		{Name: "invoice_\u202Efdp.exe", Flags: utf8Flag},
+		{Name: "plain.txt", Flags: utf8Flag},
+	})
+
+	r, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := findEntry(t, r, "invoice_\u202Efdp.exe"); !hasProblem(e, "bidirectional") {
+		t.Errorf("problems = %v, want a bidirectional control character problem", e.Problems)
+	}
+	if e := findEntry(t, r, "plain.txt"); len(e.Problems) != 0 {
+		t.Errorf("plain.txt should have no problems, got %v", e.Problems)
 	}
 }

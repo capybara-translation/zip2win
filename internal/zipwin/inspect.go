@@ -85,6 +85,9 @@ func checkName(name string, flags uint16) []string {
 		// normalization result can't be trusted there.
 		problems = append(problems, "name is not NFC-normalized")
 	}
+	if hasBidiControl(name) {
+		problems = append(problems, "bidirectional control character in name")
+	}
 	// The following are names that can serve as path-traversal material on the extracting side.
 	if strings.Contains(name, `\`) {
 		problems = append(problems, "backslash in name")
@@ -108,6 +111,18 @@ func checkName(name string, flags uint16) []string {
 		}
 	}
 	return problems
+}
+
+// hasBidiControl reports whether name contains a Unicode bidirectional control
+// character. They're invisible, but any viewer that applies the bidi algorithm
+// reorders the text around them: "invoice_" + U+202E + "fdp.exe" displays as
+// "invoice_exe.pdf", disguising an executable as a document.
+func hasBidiControl(name string) bool {
+	return strings.IndexFunc(name, isBidiControl) >= 0
+}
+
+func isBidiControl(r rune) bool {
+	return unicode.Is(unicode.Bidi_Control, r)
 }
 
 // isASCIILetter reports whether b is a character usable as a Windows drive letter.
@@ -137,6 +152,8 @@ func (r *Report) Format(w io.Writer) error {
 // that might carry a file name (such as one wrapped in *fs.PathError).
 // Newlines are escaped as control characters too, so one-message-per-line
 // output can't be broken by an embedded newline.
+// Bidirectional control characters are escaped as well, so a name can't be
+// visually reordered to pass for a different one.
 func DisplayName(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); {
@@ -144,7 +161,7 @@ func DisplayName(name string) string {
 		switch {
 		case r == utf8.RuneError && size == 1:
 			fmt.Fprintf(&b, `\x%02x`, name[i])
-		case unicode.IsControl(r):
+		case unicode.IsControl(r) || isBidiControl(r):
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
