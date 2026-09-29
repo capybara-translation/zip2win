@@ -1,5 +1,11 @@
 name: test
 on: [push, pull_request]
+
+# These jobs only read the repository. Declaring it here keeps GITHUB_TOKEN
+# read-only regardless of the repository's default workflow permissions.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -7,8 +13,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -19,3 +25,4 @@ jobs:
       - run: go mod tidy -diff
       - run: go vet ./...
       - run: go test ./...
+
