@@ -8,16 +8,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/capybara-translation/zip2win/internal/zipwin"
 )
 
 const usageText = `Usage:
-  zip2win create [--force] <source> <output.zip>
+  zip2win create [--force] <source> [<output.zip>]
   zip2win inspect <file.zip>
   zip2win version
 
+Without <output.zip>, create writes <source>.zip next to <source>.
 Flags must come before positional arguments.
 `
 
@@ -58,12 +60,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 func runCreate(args []string, stdout, stderr io.Writer) int {
 	flags := newFlagSet("create")
 	force := flags.Bool("force", false, "overwrite the output file if it exists")
-	if code, done := parseArgs(flags, args, 2, stdout, stderr); done {
+	if code, done := parseArgs(flags, args, 1, 2, stdout, stderr); done {
 		return code
 	}
+	source, dest := flags.Arg(0), flags.Arg(1)
+	if flags.NArg() == 1 {
+		var err error
+		if dest, err = defaultOutput(source); err != nil {
+			fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
+			return 1
+		}
+	}
 	err := zipwin.Create(zipwin.CreateOptions{
-		Source: flags.Arg(0),
-		Dest:   flags.Arg(1),
+		Source: source,
+		Dest:   dest,
 		Stderr: stderr,
 		Force:  *force,
 	})
@@ -77,7 +87,7 @@ func runCreate(args []string, stdout, stderr io.Writer) int {
 // runInspect runs the inspect subcommand. Inspection failures also exit 1.
 func runInspect(args []string, stdout, stderr io.Writer) int {
 	flags := newFlagSet("inspect")
-	if code, done := parseArgs(flags, args, 1, stdout, stderr); done {
+	if code, done := parseArgs(flags, args, 1, 1, stdout, stderr); done {
 		return code
 	}
 	report, err := zipwin.Inspect(flags.Arg(0))
@@ -105,10 +115,10 @@ func newFlagSet(name string) *flag.FlagSet {
 	return flags
 }
 
-// parseArgs parses args into flags and checks that exactly nArgs positional
-// arguments remain. When done is true, the caller returns code as is.
+// parseArgs parses args into flags and checks that between minArgs and maxArgs
+// positional arguments remain. When done is true, the caller returns code as is.
 // -h/--help behaves like the top-level "help": usage on stdout, exit 0.
-func parseArgs(flags *flag.FlagSet, args []string, nArgs int, stdout, stderr io.Writer) (code int, done bool) {
+func parseArgs(flags *flag.FlagSet, args []string, minArgs, maxArgs int, stdout, stderr io.Writer) (code int, done bool) {
 	err := flags.Parse(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -130,8 +140,8 @@ func parseArgs(flags *flag.FlagSet, args []string, nArgs int, stdout, stderr io.
 			return 2, true
 		}
 	}
-	if flags.NArg() != nArgs {
-		printArgCountError(flags, nArgs, stderr)
+	if n := flags.NArg(); n < minArgs || n > maxArgs {
+		printArgCountError(flags, minArgs, maxArgs, stderr)
 		return 2, true
 	}
 	return 0, false
@@ -161,12 +171,15 @@ func printFlagHint(arg string, stderr io.Writer) {
 // printArgCountError explains a wrong number of positional arguments. An
 // argument that starts with "-" but isn't a defined flag (a mistyped one such
 // as --forse) is still the likeliest cause, so it gets the same hint.
-func printArgCountError(flags *flag.FlagSet, nArgs int, stderr io.Writer) {
-	noun := "arguments"
-	if nArgs == 1 {
-		noun = "argument"
+func printArgCountError(flags *flag.FlagSet, minArgs, maxArgs int, stderr io.Writer) {
+	want := fmt.Sprintf("%d or %d arguments", minArgs, maxArgs)
+	switch {
+	case minArgs == maxArgs && minArgs == 1:
+		want = "1 argument"
+	case minArgs == maxArgs:
+		want = fmt.Sprintf("%d arguments", minArgs)
 	}
-	fmt.Fprintf(stderr, "zip2win: %s takes %d %s, got %d\n", flags.Name(), nArgs, noun, flags.NArg())
+	fmt.Fprintf(stderr, "zip2win: %s takes %s, got %d\n", flags.Name(), want, flags.NArg())
 	for _, arg := range flags.Args() {
 		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
 			printFlagHint(arg, stderr)
@@ -174,4 +187,18 @@ func printArgCountError(flags *flag.FlagSet, nArgs int, stderr io.Writer) {
 		}
 	}
 	fmt.Fprint(stderr, usageText)
+}
+
+// defaultOutput returns where create writes when no output path is given:
+// next to source, in its parent directory rather than the current one, named
+// after it with ".zip" appended (docs -> docs.zip, memo.txt -> memo.txt.zip).
+// Appending instead of replacing the extension keeps report.txt and report.pdf
+// from both mapping to report.zip. filepath.Abs also drops a trailing slash and
+// resolves ".", so "docs/" gives docs.zip and "." gives ../<dir>.zip.
+func defaultOutput(source string) (string, error) {
+	abs, err := filepath.Abs(source)
+	if err != nil {
+		return "", fmt.Errorf("resolve source path: %w", err)
+	}
+	return abs + ".zip", nil
 }

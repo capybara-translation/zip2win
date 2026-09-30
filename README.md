@@ -42,6 +42,10 @@ Verify it against `checksums.txt` from the same release.
 # Archive a directory (or file) into a ZIP. The contents of docs/ are stored as docs/...
 zip2win create docs docs.zip
 
+# Without an output path, the ZIP is written next to the source as <source>.zip
+# (docs -> docs.zip, memo.txt -> memo.txt.zip)
+zip2win create docs
+
 # Overwrite an existing output file
 zip2win create --force docs docs.zip
 

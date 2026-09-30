@@ -103,10 +103,104 @@ func TestRun_CreateProducesZip(t *testing.T) {
 }
 
 func TestRun_CreateWrongArgCount(t *testing.T) {
+	for _, args := range [][]string{{"create"}, {"create", "a", "b", "c"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 2 {
+			t.Errorf("%v: exit code = %d, want 2", args, code)
+		}
+		want := fmt.Sprintf("zip2win: create takes 1 or 2 arguments, got %d", len(args)-1)
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("%v: stderr = %q, want it to contain %q", args, stderr.String(), want)
+		}
+	}
+}
+
+// makeTree creates work/docs/a.txt under a fresh temp dir and returns the temp dir.
+func makeTree(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "work", "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", "docs", "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return tmp
+}
+
+// zipEntries returns the entry names of the ZIP at path.
+func zipEntries(t *testing.T, path string) []string {
+	t.Helper()
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer r.Close()
+	var names []string
+	for _, f := range r.File {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// TestRun_CreateDefaultOutput confirms that without an output path the ZIP is
+// written next to the source (in its parent directory, not the current one) as
+// <source>.zip. For a file, ".zip" is appended rather than replacing the
+// extension, so report.txt and report.pdf can't both map to report.zip.
+func TestRun_CreateDefaultOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		cwd    string // relative to the temp dir
+		source string // as typed on the command line, relative to cwd
+		want   string // relative to the temp dir
+	}{
+		{"relative directory", "work", "docs", "work/docs.zip"},
+		{"trailing slash", "work", "docs/", "work/docs.zip"},
+		{"path from elsewhere lands next to the source", ".", "work/docs", "work/docs.zip"},
+		{"current directory lands in its parent", "work/docs", ".", "work/docs.zip"},
+		{"single file keeps its extension", "work/docs", "a.txt", "work/docs/a.txt.zip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := makeTree(t)
+			t.Chdir(filepath.Join(tmp, tt.cwd))
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"create", tt.source}, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr.String())
+			}
+			want := filepath.Join(tmp, filepath.FromSlash(tt.want))
+			if len(zipEntries(t, want)) == 0 {
+				t.Errorf("%s has no entries", want)
+			}
+		})
+	}
+}
+
+func TestRun_CreateDefaultOutputExistsWithoutForce(t *testing.T) {
+	tmp := makeTree(t)
+	t.Chdir(filepath.Join(tmp, "work"))
+	if err := os.WriteFile("docs.zip", []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"create", "only-one"}, &stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
+	if code := run([]string{"create", "docs"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Errorf("stderr = %q, want an 'already exists' error", stderr.String())
+	}
+	if b, _ := os.ReadFile("docs.zip"); string(b) != "precious" {
+		t.Errorf("existing docs.zip was modified: %q", b)
+	}
+
+	stderr.Reset()
+	if code := run([]string{"create", "--force", "docs"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("with --force: exit code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if got := zipEntries(t, "docs.zip"); len(got) != 2 {
+		t.Errorf("entries = %v, want [docs/ docs/a.txt]", got)
 	}
 }
 
@@ -285,7 +379,7 @@ func TestRun_DashPrefixedNameThatIsNotAFlagIsAccepted(t *testing.T) {
 
 func TestRun_WrongArgCountWithoutFlagHasNoHint(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	run([]string{"create", "src"}, &stdout, &stderr)
+	run([]string{"create", "a", "b", "c"}, &stdout, &stderr)
 	if strings.Contains(stderr.String(), "looks like a flag") {
 		t.Errorf("stderr = %q, want no flag hint when no argument looks like a flag", stderr.String())
 	}
