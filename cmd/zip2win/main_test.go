@@ -215,6 +215,35 @@ func TestRun_InspectWrongArgCount(t *testing.T) {
 	if code := run([]string{"inspect"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
+	if !strings.Contains(stderr.String(), "zip2win: inspect takes 1 argument, got 0") {
+		t.Errorf("stderr = %q, want the expected and actual argument counts", stderr.String())
+	}
+}
+
+// TestRun_FlagAfterArgumentsIsExplained confirms the hint for the most likely
+// cause of a wrong argument count: the flag package stops parsing flags at the
+// first positional argument, so a trailing --force is taken as a third argument.
+func TestRun_FlagAfterArgumentsIsExplained(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", "src", "out.zip", "--force"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	for _, want := range []string{
+		"zip2win: create takes 2 arguments, got 3",
+		`"--force" looks like a flag; flags must come before positional arguments`,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestRun_WrongArgCountWithoutFlagHasNoHint(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	run([]string{"create", "src"}, &stdout, &stderr)
+	if strings.Contains(stderr.String(), "looks like a flag") {
+		t.Errorf("stderr = %q, want no flag hint when no argument looks like a flag", stderr.String())
+	}
 }
 
 // TestRun_SubcommandHelp confirms that -h/--help on a subcommand behaves like

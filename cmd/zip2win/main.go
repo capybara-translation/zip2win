@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/capybara-translation/zip2win/internal/zipwin"
 )
@@ -118,8 +119,28 @@ func parseArgs(flags *flag.FlagSet, args []string, nArgs int, stdout, stderr io.
 		fmt.Fprint(stderr, usageText)
 		return 2, true
 	case flags.NArg() != nArgs:
-		fmt.Fprint(stderr, usageText)
+		printArgCountError(flags, nArgs, stderr)
 		return 2, true
 	}
 	return 0, false
+}
+
+// printArgCountError explains a wrong number of positional arguments. The
+// likeliest cause is a flag written after them: the flag package stops at the
+// first positional argument, so `create src out.zip --force` reads --force as
+// a third argument. When an argument looks like a flag, say so.
+func printArgCountError(flags *flag.FlagSet, nArgs int, stderr io.Writer) {
+	noun := "arguments"
+	if nArgs == 1 {
+		noun = "argument"
+	}
+	fmt.Fprintf(stderr, "zip2win: %s takes %d %s, got %d\n", flags.Name(), nArgs, noun, flags.NArg())
+	for _, arg := range flags.Args() {
+		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
+			// %q escapes control characters, like DisplayName does elsewhere.
+			fmt.Fprintf(stderr, "zip2win: %q looks like a flag; flags must come before positional arguments\n", arg)
+			break
+		}
+	}
+	fmt.Fprint(stderr, usageText)
 }
