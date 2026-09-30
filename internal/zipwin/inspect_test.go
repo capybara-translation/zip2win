@@ -253,6 +253,56 @@ func TestInspect_NotAZip(t *testing.T) {
 	}
 }
 
+// TestReport_FormatAlignsWideNames confirms the columns after the name line up
+// when names contain East Asian wide characters. Each takes three bytes but
+// two terminal columns, so padding by bytes (%-40s) misaligned the rest of the
+// line for exactly the names this tool exists for.
+func TestReport_FormatAlignsWideNames(t *testing.T) {
+	r := &Report{Entries: []Entry{
+		{Name: "docs/readme.txt", Flags: utf8Flag},
+		{Name: "資料/サブ/が.txt", Flags: utf8Flag},
+		{Name: "ｶﾀｶﾅ/é.txt", Flags: utf8Flag},
+	}}
+	var buf bytes.Buffer
+	if err := r.Format(&buf); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	var cols []int
+	for _, line := range lines {
+		i := strings.Index(line, "EFS=")
+		if i < 0 {
+			t.Fatalf("no EFS column in %q", line)
+		}
+		cols = append(cols, displayWidth(line[:i]))
+	}
+	for i, c := range cols {
+		if c != cols[0] {
+			t.Errorf("line %d: EFS column starts at %d, want %d (lines %q)", i, c, cols[0], lines)
+		}
+	}
+}
+
+func TestDisplayWidth(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"abc", 3},
+		{"資料", 4},
+		{"が", 2},
+		{"か\u3099", 2}, // NFD: the combining mark takes no column of its own
+		{"ｶﾀｶﾅ", 4},    // halfwidth katakana
+		{"é", 1},
+		{"", 0},
+	}
+	for _, c := range cases {
+		if got := displayWidth(c.in); got != c.want {
+			t.Errorf("displayWidth(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 func TestReport_FormatEscapesControlChars(t *testing.T) {
 	r := &Report{Entries: []Entry{{Name: "a\x1b[31mb.txt", Flags: utf8Flag}}}
 	var buf bytes.Buffer

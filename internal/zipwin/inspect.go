@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
+	"golang.org/x/text/width"
 )
 
 // Entry is the inspection result for one entry in the ZIP.
@@ -130,6 +131,10 @@ func isASCIILetter(b byte) bool {
 	return ('A' <= b && b <= 'Z') || ('a' <= b && b <= 'z')
 }
 
+// nameColumnWidth is the number of terminal columns the name column is padded
+// to in Format. Longer names push the rest of their line to the right.
+const nameColumnWidth = 40
+
 // Format writes the result to w in a human-readable form.
 func (r *Report) Format(w io.Writer) error {
 	for _, e := range r.Entries {
@@ -138,11 +143,48 @@ func (r *Report) Format(w io.Writer) error {
 			status = "NG: " + strings.Join(e.Problems, "; ")
 		}
 		efs := e.Flags&utf8Flag != 0
-		if _, err := fmt.Fprintf(w, "%-40s EFS=%-5v Flags=%#04x %s\n", DisplayName(e.Name), efs, e.Flags, status); err != nil {
+		if _, err := fmt.Fprintf(w, "%s EFS=%-5v Flags=%#04x %s\n", padRight(DisplayName(e.Name), nameColumnWidth), efs, e.Flags, status); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// padRight pads s with spaces to w terminal columns. fmt's %-40s pads by bytes,
+// which misaligns names with East Asian characters: three bytes each, but two
+// columns wide.
+func padRight(s string, w int) string {
+	if n := w - displayWidth(s); n > 0 {
+		return s + strings.Repeat(" ", n)
+	}
+	return s
+}
+
+// displayWidth returns the number of terminal columns s occupies: two for East
+// Asian wide and fullwidth characters, none for combining marks and other
+// invisible format characters, one for everything else. Ambiguous-width
+// characters count as one, as most terminals outside CJK locales render them;
+// there's no way to know how a given terminal is configured.
+func displayWidth(s string) int {
+	n := 0
+	for _, r := range s {
+		switch {
+		case unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+		case isWide(r):
+			n += 2
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+func isWide(r rune) bool {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return true
+	}
+	return false
 }
 
 // DisplayName escapes control characters and invalid bytes so name can be
