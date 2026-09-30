@@ -346,6 +346,37 @@ func TestCreate_WarnsOnBidiControlInName(t *testing.T) {
 	}
 }
 
+// TestCreate_RejectsInvalidUTF8Name confirms that a file name which isn't
+// valid UTF-8 is an error: every entry declares UTF-8 via the EFS flag, so
+// storing the raw bytes would make that declaration false. Only file systems
+// that store names as raw bytes (Linux ext4 and the like) can hold such a name;
+// elsewhere the test skips.
+func TestCreate_RejectsInvalidUTF8Name(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "docs")
+	name := "bad\xffname.txt"
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, name), []byte("x"), 0o644); err != nil {
+		t.Skipf("file system rejects non-UTF-8 names: %v", err)
+	}
+	// Windows stores names as UTF-16 and APFS may substitute bytes, so check
+	// the name actually round-trips before relying on it.
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != name {
+		t.Skip("file system doesn't keep non-UTF-8 names as raw bytes")
+	}
+
+	err = Create(CreateOptions{Source: src, Dest: filepath.Join(tmp, "out.zip")})
+	if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Errorf("err = %v, want 'not valid UTF-8' error", err)
+	}
+}
+
 func TestCreate_DoesNotIncludeItself(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "docs")

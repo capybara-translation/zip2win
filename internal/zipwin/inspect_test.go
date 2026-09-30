@@ -303,6 +303,31 @@ func TestDisplayWidth(t *testing.T) {
 	}
 }
 
+// TestInspect_FlagsInvalidUTF8Name confirms that a name which isn't valid
+// UTF-8 is reported even though its EFS flag claims it is, and that the bad
+// byte is escaped rather than written raw when displayed.
+func TestInspect_FlagsInvalidUTF8Name(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bad.zip")
+	writeRawZip(t, path, []*zip.FileHeader{{Name: "bad\xffname.txt", Flags: utf8Flag}})
+
+	r, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := findEntry(t, r, "bad\xffname.txt")
+	if !hasProblem(e, "not valid UTF-8") {
+		t.Errorf("problems = %v, want an invalid UTF-8 problem", e.Problems)
+	}
+	var buf bytes.Buffer
+	if err := r.Format(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `bad\xffname.txt`) || strings.Contains(buf.String(), "\xff") {
+		t.Errorf("output = %q, want the invalid byte escaped as \\xff", buf.String())
+	}
+}
+
 func TestReport_FormatEscapesControlChars(t *testing.T) {
 	r := &Report{Entries: []Entry{{Name: "a\x1b[31mb.txt", Flags: utf8Flag}}}
 	var buf bytes.Buffer
