@@ -118,17 +118,49 @@ func parseArgs(flags *flag.FlagSet, args []string, nArgs int, stdout, stderr io.
 		fmt.Fprintf(stderr, "zip2win: %s\n", zipwin.DisplayName(err.Error()))
 		fmt.Fprint(stderr, usageText)
 		return 2, true
-	case flags.NArg() != nArgs:
+	}
+	// The flag package stops parsing at the first positional argument, so a
+	// flag written after one arrives here as a positional argument. When the
+	// count happens to match, `create docs --force` would write a ZIP named
+	// "--force"; reject it no matter the count.
+	for _, arg := range flags.Args() {
+		if isDefinedFlag(flags, arg) {
+			printFlagHint(arg, stderr)
+			fmt.Fprint(stderr, usageText)
+			return 2, true
+		}
+	}
+	if flags.NArg() != nArgs {
 		printArgCountError(flags, nArgs, stderr)
 		return 2, true
 	}
 	return 0, false
 }
 
-// printArgCountError explains a wrong number of positional arguments. The
-// likeliest cause is a flag written after them: the flag package stops at the
-// first positional argument, so `create src out.zip --force` reads --force as
-// a third argument. When an argument looks like a flag, say so.
+// isDefinedFlag reports whether arg is a spelling the flag package would have
+// parsed as one of flags' flags or as -h/-help: one or two leading dashes, and
+// an optional "=value". Anything else starting with "-" is an ordinary name,
+// so a file called "-notes.txt" can still be given as is.
+func isDefinedFlag(flags *flag.FlagSet, arg string) bool {
+	name, ok := strings.CutPrefix(arg, "-")
+	if !ok {
+		return false
+	}
+	name = strings.TrimPrefix(name, "-")
+	name, _, _ = strings.Cut(name, "=")
+	return name == "h" || name == "help" || flags.Lookup(name) != nil
+}
+
+// printFlagHint says that arg was taken as a positional argument because it
+// came after one.
+func printFlagHint(arg string, stderr io.Writer) {
+	// %q escapes control characters, like DisplayName does elsewhere.
+	fmt.Fprintf(stderr, "zip2win: %q looks like a flag; flags must come before positional arguments\n", arg)
+}
+
+// printArgCountError explains a wrong number of positional arguments. An
+// argument that starts with "-" but isn't a defined flag (a mistyped one such
+// as --forse) is still the likeliest cause, so it gets the same hint.
 func printArgCountError(flags *flag.FlagSet, nArgs int, stderr io.Writer) {
 	noun := "arguments"
 	if nArgs == 1 {
@@ -137,8 +169,7 @@ func printArgCountError(flags *flag.FlagSet, nArgs int, stderr io.Writer) {
 	fmt.Fprintf(stderr, "zip2win: %s takes %d %s, got %d\n", flags.Name(), nArgs, noun, flags.NArg())
 	for _, arg := range flags.Args() {
 		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
-			// %q escapes control characters, like DisplayName does elsewhere.
-			fmt.Fprintf(stderr, "zip2win: %q looks like a flag; flags must come before positional arguments\n", arg)
+			printFlagHint(arg, stderr)
 			break
 		}
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -228,13 +229,57 @@ func TestRun_FlagAfterArgumentsIsExplained(t *testing.T) {
 	if code := run([]string{"create", "src", "out.zip", "--force"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	for _, want := range []string{
-		"zip2win: create takes 2 arguments, got 3",
-		`"--force" looks like a flag; flags must come before positional arguments`,
-	} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
-		}
+	want := `"--force" looks like a flag; flags must come before positional arguments`
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+	}
+}
+
+// TestRun_TrailingFlagIsNotTakenAsOutput confirms that a flag written after the
+// source is rejected instead of being used as the output path. The flag package
+// stops at the first positional argument, so `create docs --force` used to
+// succeed and write a ZIP named "--force". Every spelling the flag package
+// accepts for a defined flag, plus -h/--help, counts.
+func TestRun_TrailingFlagIsNotTakenAsOutput(t *testing.T) {
+	for _, flagArg := range []string{"--force", "-force", "--force=true", "--help", "-h"} {
+		t.Run(flagArg, func(t *testing.T) {
+			tmp := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(tmp)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"create", "docs", flagArg}, &stdout, &stderr); code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			want := fmt.Sprintf("%q looks like a flag; flags must come before positional arguments", flagArg)
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+			}
+			if _, err := os.Lstat(filepath.Join(tmp, flagArg)); err == nil {
+				t.Errorf("a file named %q was created", flagArg)
+			}
+		})
+	}
+}
+
+// TestRun_DashPrefixedNameThatIsNotAFlagIsAccepted pins the other side of the
+// rule: only names of defined flags are rejected, so a file name that merely
+// starts with "-" can still be given as is.
+func TestRun_DashPrefixedNameThatIsNotAFlagIsAccepted(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(tmp)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", "docs", "-out.zip"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "-out.zip")); err != nil {
+		t.Errorf("-out.zip not created: %v", err)
 	}
 }
 
